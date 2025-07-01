@@ -2,7 +2,7 @@
 %% מודול שליח (Courier) - FSM
 %% כל תהליך שליח מייצג שליח אמיתי במערכת
 %% עם התקדמות אוטומטית בין המצבים (כולל דיליי רנדומלי)
-%% עדכון: שליחים לא חוזרים לדפו - נשארים זמינים במקום המסירה
+%% עדכון: שליחים זמינים לכל האזורים במערכת
 %% -----------------------------------------------------------
 
 -module(courier).
@@ -30,8 +30,10 @@ init([CourierId]) ->
     io:format("Courier ~p starting idle, waiting for delivery assignments...~n", [CourierId]),
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
-    %% zone_manager קבוע (אפשר להרחיב בהמשך)
-    {ok, idle, #{id => CourierId, zone_manager => list_to_atom("zone_manager_north")}}.
+    %% רשימת כל האזורים במערכת
+    AllZones = ["north", "center", "south"],
+    %% השליח לא צריך להודיע שהוא זמין - הוא כבר בתור המרכזי
+    {ok, idle, #{id => CourierId, zones => AllZones}}.
 
 %% -----------------------------------------------------------
 %% handle_event - מטפל בכל האירועים במצב אחיד
@@ -48,12 +50,21 @@ handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
     erlang:send_after(PickupMs, self(), pickup_complete),
     {next_state, picking_up, Data#{package => PackageId}};
 
+%% תיקון: מטפל גם במקרה שיש אזור מקור
+handle_event(cast, {assign_delivery, PackageId, _FromZone}, idle, Data) ->
+    %% קורא לטיפול הרגיל (בלי האזור)
+    handle_event(cast, {assign_delivery, PackageId}, idle, Data);
+
 %% תיקון: שליח תפוס לא יכול לקבל הקצאות נוספות
-handle_event(cast, {assign_delivery, PackageId}, StateName, Data) when StateName =/= idle ->
-    io:format("Courier(~p) BUSY in state ~p, rejecting package ~p~n", [maps:get(id, Data), StateName, PackageId]),
-    %% החזר את החבילה ל-zone manager כ"failed assignment"
-    ZoneManager = maps:get(zone_manager, Data),
-    gen_statem:cast(ZoneManager, {assignment_failed, PackageId, maps:get(id, Data)}),
+handle_event(cast, {assign_delivery, PackageId, FromZone}, StateName, Data) when StateName =/= idle ->
+    io:format("Courier(~p) BUSY in state ~p, rejecting package ~p from zone ~p~n", 
+              [maps:get(id, Data), StateName, PackageId, FromZone]),
+    %% שולח הודעת כשל רק לאזור שביקש את ההקצאה
+    ZoneManager = list_to_atom("zone_manager_" ++ FromZone),
+    case whereis(ZoneManager) of
+        undefined -> ok;
+        _ -> gen_statem:cast(ZoneManager, {assignment_failed, PackageId, maps:get(id, Data)})
+    end,
     {keep_state, Data};
 
 %% מצב picking_up – שליח נוסע למסעדה לאיסוף
@@ -70,9 +81,12 @@ handle_event(info, pickup_complete, picking_up, Data) ->
 handle_event(info, delivery_complete, delivering, Data) ->
     io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [maps:get(id, Data), maps:get(package, Data)]),
     package:update_status(maps:get(package, Data), delivered),
-    %% תיקון: במקום לחזור לדפו, השליח זמין מיד למשלוח הבא
-    %% עדכון אוטומטי של zone_manager שהוא פנוי וזמין
-    gen_statem:cast(maps:get(zone_manager, Data), {courier_available, maps:get(id, Data)}),
+    %% החזר את השליח לתור המרכזי
+    CourierId = maps:get(id, Data),
+    courier_pool:return_courier(CourierId),
+    %% הודע לכל האזורים שאולי יש שליח פנוי (כדי שיבדקו אם יש להם חבילות ממתינות)
+    AllZones = maps:get(zones, Data),
+    notify_all_zones_available(CourierId, AllZones),
     {next_state, idle, maps:remove(package, Data)};
 
 %% מצב moving_zone – שמור לעתיד, מעבר אזורים
@@ -97,15 +111,28 @@ handle_event(EventType, Event, StateName, Data) ->
     {keep_state, Data}.
 
 %% -----------------------------------------------------------
-%% פונקציה עזר - זמן רנדומלי בין 10 שניות ל-60 שניות
+%% פונקציות עזר
 %% -----------------------------------------------------------
+
+%% פונקציה עזר - זמן רנדומלי בין 10 שניות ל-60 שניות
 rand_time() ->
     %% ערך רנדומלי בין 10_000 ל-60_000 מילי-שניות
     (rand:uniform(50_001) + 9_999).
+
+%% הודע לכל האזורים שהשליח זמין
+notify_all_zones_available(CourierId, Zones) ->
+    lists:foreach(fun(Zone) ->
+        ZoneManager = list_to_atom("zone_manager_" ++ Zone),
+        case whereis(ZoneManager) of
+            undefined -> 
+                io:format("Warning: Zone manager ~p not found~n", [Zone]);
+            _ -> 
+                zone_manager:courier_available(Zone, CourierId)
+        end
+    end, Zones).
 
 %% -----------------------------------------------------------
 %% דרישות gen_statem
 %% -----------------------------------------------------------
 terminate(_Reason, _State, _Data) -> ok.
 code_change(_OldVsn, State, Data, _Extra) -> {ok, State, Data}.
-

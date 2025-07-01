@@ -1,7 +1,7 @@
 %% -----------------------------------------------------------
 %% מודול מנהל אזור (Zone Manager) - FSM
 %% אחראי על חלוקת משלוחים ושליחים באזור מסוים
-%% תיקון: שינוי ל-handle_event mode כדי לפתור את בעיית ה-cast
+%% תיקון: עדכון רשימת השליחים לפי האזור
 %% -----------------------------------------------------------
 
 -module(zone_manager).
@@ -24,15 +24,18 @@ callback_mode() -> handle_event_function.
 
 %% -----------------------------------------------------------
 %% שמירת סטייט: רשימת שליחים זמינים, חבילות שממתינות, וכו'
+%% כל השליחים זמינים לכל האזורים!
 %% -----------------------------------------------------------
 init([ZoneName]) ->
     io:format("Zone Manager ~p initializing...~n", [ZoneName]),
-    %% עדכן את כל שליחי האזור!
+    
+    io:format("Zone ~p initialized (using central courier pool)~n", [ZoneName]),
+    
     {ok, monitoring, #{
         zone => ZoneName,
-        couriers => ["courier1", "courier2", "courier3", "courier4"],
-        available_couriers => ["courier1", "courier2", "courier3", "courier4"],
-        waiting_packages => []
+        waiting_packages => [],
+        total_deliveries => 0,  %% מונה משלוחים כולל
+        failed_deliveries => 0  %% מונה משלוחים שנכשלו
     }}.
 
 %% -----------------------------------------------------------
@@ -51,158 +54,208 @@ courier_available(Zone, CourierId) ->
 %% פונקציה להדפסת מצב DEBUG: שליחים זמינים, חבילות ממתינות
 %% -----------------------------------------------------------
 debug_state(Data) ->
-    Avail = maps:get(available_couriers, Data, []),
     Waiting = maps:get(waiting_packages, Data, []),
+    Total = maps:get(total_deliveries, Data, 0),
+    Failed = maps:get(failed_deliveries, Data, 0),
     io:format(
-        ">>> DEBUG: Available couriers: ~p (~p total), Waiting packages: ~p (~p total)~n",
-        [Avail, length(Avail), Waiting, length(Waiting)]
+        ">>> Zone ~p DEBUG: Waiting packages: ~p (~p total), Total deliveries: ~p, Failed: ~p~n",
+        [maps:get(zone, Data), Waiting, length(Waiting), Total, Failed]
     ).
 
 %% -----------------------------------------------------------
 %% handle_event - מטפל בכל האירועים במצב אחיד
 %% -----------------------------------------------------------
+
+%% טיפול בחבילה חדשה במצב monitoring
 handle_event(cast, {new_package, PackageId}, monitoring, Data) ->
     debug_state(Data),
     io:format("Zone(~p) received new package: ~p~n", [maps:get(zone, Data), PackageId]),
-    Avail = maps:get(available_couriers, Data),
-    case Avail of
-        [Courier | Rest] ->
-            io:format("Zone(~p) assigns package ~p to courier ~p~n", [maps:get(zone, Data), PackageId, Courier]),
+    
+    %% בקש שליח מהתור המרכזי
+    case courier_pool:request_courier() of
+        {ok, Courier} ->
+            %% קיבלנו שליח - מקצה אותו לחבילה
+            io:format("Zone(~p) got courier ~p from pool for package ~p~n", 
+                     [maps:get(zone, Data), Courier, PackageId]),
             %% יצירת תהליך חבילה
-            {ok, _Pid} = package:start_link(PackageId, self()),
-            %% תיקון: בדיקה שהשליח באמת פנוי לפני הקצאה
-            CourierPid = whereis(list_to_atom("courier_" ++ Courier)),
-            case CourierPid of
-                undefined ->
-                    io:format("Zone(~p): Courier ~p not found, requeueing package ~p~n", 
-                             [maps:get(zone, Data), Courier, PackageId]),
-                    Waiting = maps:get(waiting_packages, Data),
-                    NewData = Data#{waiting_packages => Waiting ++ [PackageId]},
-                    {keep_state, NewData};
-                _ ->
-                    package:assign_courier(PackageId, Courier),
-                    NewData = Data#{available_couriers => Rest},
-                    debug_state(NewData),
-                    {keep_state, NewData}
-            end;
-        [] ->
-            io:format("Zone(~p): No available couriers, package ~p waits in queue~n", [maps:get(zone, Data), PackageId]),
+            {ok, _Pid} = package:start_link(PackageId, list_to_atom("zone_manager_" ++ maps:get(zone, Data))),
+            %% הקצאת השליח לחבילה
+            package:assign_courier(PackageId, Courier),
+            debug_state(Data),
+            {keep_state, Data};
+        {error, no_couriers_available} ->
+            %% אין שליחים פנויים - החבילה נכנסת לתור המתנה
+            io:format("Zone(~p): No couriers available, package ~p waits in queue~n", 
+                     [maps:get(zone, Data), PackageId]),
             Waiting = maps:get(waiting_packages, Data),
             NewData = Data#{waiting_packages => Waiting ++ [PackageId]},
             debug_state(NewData),
             {keep_state, NewData}
     end;
 
+%% טיפול בשליח שהתפנה - בדוק אם יש חבילות ממתינות באזור
 handle_event(cast, {courier_available, CourierId}, monitoring, Data) ->
     debug_state(Data),
-    io:format("Zone(~p): Courier ~p is now available~n", [maps:get(zone, Data), CourierId]),
-    Waiting = maps:get(waiting_packages, Data),
-    %% תיקון: נקה חבילות שכבר לא זקוקות לשליח מהתור
-    CleanWaiting = lists:filter(fun(Pkg) ->
-        case whereis(list_to_atom("package_" ++ Pkg)) of
-            undefined -> true; % חבילה לא נוצרה, תישאר בתור
-            PackagePid ->
-                %% בדיקה פשוטה - אם יש לחבילה שליח במפת הנתונים, היא כבר הוקצתה
-                try gen_statem:call(PackagePid, get_state, 100) of
-                    ordered -> true;  % עדיין זקוקה לשליח
-                    _ -> false        % כבר הוקצתה
-                catch
-                    _:_ -> true % אם יש בעיה, השאר בתור
-                end
-        end
-    end, Waiting),
+    io:format("Zone(~p): Notified that courier ~p might be available~n", [maps:get(zone, Data), CourierId]),
     
-    case CleanWaiting of
+    Waiting = maps:get(waiting_packages, Data),
+    case Waiting of
         [Pkg | RestPkgs] ->
-            io:format("Zone(~p): Assigns waiting package ~p to courier ~p~n", [maps:get(zone, Data), Pkg, CourierId]),
-            %% וידוא שתהליך החבילה קיים
-            case whereis(list_to_atom("package_" ++ Pkg)) of
-                undefined ->
-                    {ok, _Pid} = package:start_link(Pkg, self());
-                _Pid ->
-                    ok
-            end,
-            package:assign_courier(Pkg, CourierId),
-            NewData = Data#{waiting_packages => RestPkgs},
-            debug_state(NewData),
-            {keep_state, NewData};
+            %% יש חבילה ממתינה - נסה לקבל שליח מהתור
+            case courier_pool:request_courier() of
+                {ok, AssignedCourier} ->
+                    %% קיבלנו שליח (אולי אותו אחד, אולי אחר)
+                    io:format("Zone(~p): Got courier ~p from pool for waiting package ~p~n", 
+                             [maps:get(zone, Data), AssignedCourier, Pkg]),
+                    %% וידוא שתהליך החבילה קיים
+                    case whereis(list_to_atom("package_" ++ Pkg)) of
+                        undefined ->
+                            {ok, _Pid} = package:start_link(Pkg, list_to_atom("zone_manager_" ++ maps:get(zone, Data)));
+                        _Pid ->
+                            ok
+                    end,
+                    package:assign_courier(Pkg, AssignedCourier),
+                    NewData = Data#{waiting_packages => RestPkgs},
+                    debug_state(NewData),
+                    {keep_state, NewData};
+                {error, no_couriers_available} ->
+                    %% אין שליחים פנויים - השאר את החבילה בתור
+                    io:format("Zone(~p): No couriers available for waiting package~n", [maps:get(zone, Data)]),
+                    {keep_state, Data}
+            end;
         [] ->
-            Avail = maps:get(available_couriers, Data),
-            NewData = Data#{available_couriers => Avail ++ [CourierId], waiting_packages => CleanWaiting},
-            debug_state(NewData),
-            io:format("Zone(~p): Courier ~p is now waiting for next delivery (no packages in queue)~n", [maps:get(zone, Data), CourierId]),
-            {keep_state, NewData}
+            %% אין חבילות ממתינות באזור הזה
+            io:format("Zone(~p): No waiting packages~n", [maps:get(zone, Data)]),
+            {keep_state, Data}
     end;
 
+%% טיפול בהודעת סיום משלוח מוצלח
 handle_event(cast, {package_delivered, PackageId, CourierId}, monitoring, Data) ->
     debug_state(Data),
     io:format("Zone(~p): Package ~p delivered by courier ~p!~n", [maps:get(zone, Data), PackageId, CourierId]),
-    {keep_state, Data};
-
-%% תיקון: טיפול בכשל הקצאה - שליח תפוס
-handle_event(cast, {assignment_failed, PackageId, CourierId}, monitoring, Data) ->
-    debug_state(Data),
-    io:format("Zone(~p): Assignment failed - courier ~p busy, requeueing package ~p~n", 
-              [maps:get(zone, Data), CourierId, PackageId]),
-    %% החזר את החבילה לתור ההמתנה
-    Waiting = maps:get(waiting_packages, Data),
-    NewData = Data#{waiting_packages => Waiting ++ [PackageId]},
-    debug_state(NewData),
+    %% עדכון סטטיסטיקות
+    Total = maps:get(total_deliveries, Data, 0),
+    NewData = Data#{total_deliveries => Total + 1},
     {keep_state, NewData};
 
-%% טיפול במצבים נוספים
+%% טיפול בכשל הקצאה - שליח תפוס
+handle_event(cast, {assignment_failed, PackageId, CourierId}, monitoring, Data) ->
+    debug_state(Data),
+    %% בדיקה שהחבילה שייכת לאזור הזה
+    Zone = maps:get(zone, Data),
+    ExpectedPrefix = Zone ++ "_",
+    case string:prefix(PackageId, ExpectedPrefix) of
+        nomatch ->
+            %% החבילה לא שייכת לאזור הזה - מתעלם
+            io:format("Zone(~p): Ignoring assignment failure for package ~p (belongs to different zone)~n", 
+                      [Zone, PackageId]),
+            {keep_state, Data};
+        _ ->
+            %% החבילה שייכת לאזור הזה
+            io:format("Zone(~p): Assignment failed - courier ~p busy, requeueing package ~p~n", 
+                      [Zone, CourierId, PackageId]),
+            %% החזר את החבילה לתור ההמתנה
+            Waiting = maps:get(waiting_packages, Data),
+            %% עדכון סטטיסטיקות כשלונות
+            Failed = maps:get(failed_deliveries, Data, 0),
+            NewData = Data#{
+                waiting_packages => Waiting ++ [PackageId],
+                failed_deliveries => Failed + 1
+            },
+            debug_state(NewData),
+            {keep_state, NewData}
+    end;
+
+%% התחלת מחזור אופטימיזציה
 handle_event(cast, {start_optimization}, monitoring, Data) ->
     io:format("Zone(~p): Starting optimization cycle~n", [maps:get(zone, Data)]),
+    %% TODO: ממש אלגוריתם אופטימיזציה למסלולים
     {next_state, optimizing, Data};
 
+%% זיהוי עומס יתר באזור
 handle_event(cast, {overload_detected}, monitoring, Data) ->
     io:format("Zone(~p): Overload detected, entering emergency mode~n", [maps:get(zone, Data)]),
+    %% TODO: בקש עזרה מאזורים סמוכים
     {next_state, emergency_mode, Data};
 
-%% מצב אופטימיזציה
+%% מצב אופטימיזציה - סיום האופטימיזציה
 handle_event(cast, {optimization_complete}, optimizing, Data) ->
     io:format("Zone(~p): Optimization complete, returning to monitoring~n", [maps:get(zone, Data)]),
     {next_state, monitoring, Data};
 
+%% מצב אופטימיזציה - חבילה חדשה מתקבלת
 handle_event(cast, {new_package, PackageId}, optimizing, Data) ->
     io:format("Zone(~p): Package ~p queued during optimization~n", [maps:get(zone, Data), PackageId]),
     Waiting = maps:get(waiting_packages, Data),
     NewData = Data#{waiting_packages => Waiting ++ [PackageId]},
     {keep_state, NewData};
 
-%% מצב חירום
+%% מצב חירום - איזון עומסים הושלם
 handle_event(cast, {load_balanced}, emergency_mode, Data) ->
     io:format("Zone(~p): Load balanced, returning to normal operation~n", [maps:get(zone, Data)]),
     {next_state, monitoring, Data};
 
+%% מצב חירום - שליח מתפנה
 handle_event(cast, {courier_available, CourierId}, emergency_mode, Data) ->
     io:format("Zone(~p): Emergency - courier ~p available~n", [maps:get(zone, Data), CourierId]),
     Waiting = maps:get(waiting_packages, Data),
     case Waiting of
         [Pkg | RestPkgs] ->
+            %% הקצאה דחופה של החבילה הראשונה בתור
             package:assign_courier(Pkg, CourierId),
             NewData = Data#{waiting_packages => RestPkgs},
             case RestPkgs of
-                [] -> {next_state, monitoring, NewData};
-                _ -> {keep_state, NewData}
+                [] -> {next_state, monitoring, NewData};  %% אין יותר חבילות - חזרה למצב רגיל
+                _ -> {keep_state, NewData}  %% עדיין יש חבילות - נשאר במצב חירום
             end;
         [] ->
+            %% אין חבילות ממתינות - חזרה למצב רגיל
             Avail = maps:get(available_couriers, Data),
             NewData = Data#{available_couriers => Avail ++ [CourierId]},
             {next_state, monitoring, NewData}
     end;
 
-%% מצב איזון עומסים
+%% מצב איזון עומסים - סיום איזון
 handle_event(cast, {load_balance_complete}, load_balancing, Data) ->
     io:format("Zone(~p): Load balancing complete~n", [maps:get(zone, Data)]),
     {next_state, monitoring, Data};
 
+%% מצב איזון עומסים - העברת חבילה לאזור אחר
 handle_event(cast, {transfer_package, PackageId, ToZone}, load_balancing, Data) ->
     io:format("Zone(~p): Transferring package ~p to zone ~p~n", [maps:get(zone, Data), PackageId, ToZone]),
     Waiting = maps:get(waiting_packages, Data),
     NewWaiting = lists:delete(PackageId, Waiting),
+    %% TODO: יצירת חבילה חדשה באזור היעד
     NewData = Data#{waiting_packages => NewWaiting},
     {keep_state, NewData};
+
+%% קבלת סטטיסטיקות האזור
+handle_event({call, From}, get_stats, _StateName, Data) ->
+    Stats = #{
+        zone => maps:get(zone, Data),
+        available_couriers => length(maps:get(available_couriers, Data)),
+        waiting_packages => length(maps:get(waiting_packages, Data)),
+        total_deliveries => maps:get(total_deliveries, Data, 0),
+        failed_deliveries => maps:get(failed_deliveries, Data, 0)
+    },
+    {keep_state, Data, [{reply, From, Stats}]};
+
+%% טיפול בהודעה ששליח נתפס על ידי אזור אחר
+handle_event(cast, {courier_taken, CourierId}, _StateName, Data) ->
+    %% הסר את השליח מרשימת הפנויים
+    Avail = maps:get(available_couriers, Data),
+    case lists:member(CourierId, Avail) of
+        true ->
+            NewAvail = lists:delete(CourierId, Avail),
+            io:format("Zone(~p): Removing courier ~p from available list (taken by another zone)~n", 
+                     [maps:get(zone, Data), CourierId]),
+            NewData = Data#{available_couriers => NewAvail},
+            debug_state(NewData),
+            {keep_state, NewData};
+        false ->
+            %% השליח כבר לא ברשימה - אין מה לעשות
+            {keep_state, Data}
+    end;
 
 %% catch-all לאירועים לא מזוהים
 handle_event(EventType, Event, StateName, Data) ->
@@ -214,5 +267,12 @@ handle_event(EventType, Event, StateName, Data) ->
 %% -----------------------------------------------------------
 %% דרישות gen_statem
 %% -----------------------------------------------------------
-terminate(_Reason, _State, _Data) -> ok.
-code_change(_OldVsn, State, Data, _Extra) -> {ok, State, Data}.
+
+%% פונקציה הנקראת כשהתהליך נסגר
+terminate(_Reason, _State, Data) -> 
+    io:format("Zone Manager ~p terminating~n", [maps:get(zone, Data)]),
+    ok.
+
+%% פונקציה לטיפול בשינוי גרסת קוד בזמן ריצה
+code_change(_OldVsn, State, Data, _Extra) -> 
+    {ok, State, Data}.

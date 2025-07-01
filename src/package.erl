@@ -1,7 +1,7 @@
 %% -----------------------------------------------------------
 %% מודול חבילה (Package) - FSM
 %% כל תהליך חבילה מייצג משלוח יחיד
-%% תיקון: שינוי ל-handle_event mode כדי לפתור את בעיית ה-cast
+%% תיקון: שמירת האזור המקורי והעברתו לשליח
 %% -----------------------------------------------------------
 
 -module(package).
@@ -21,7 +21,18 @@ callback_mode() -> handle_event_function.
 
 init([PkgId, ZoneManager]) ->
     io:format("Package ~p created: ordered state~n", [PkgId]),
-    {ok, ordered, #{id => PkgId, zone_manager => ZoneManager}}.
+    %% תיקון: שמירת האזור המקורי של החבילה
+    Zone = case ZoneManager of
+        Atom when is_atom(Atom) ->
+            %% חילוץ שם האזור מהאטום zone_manager_XXX
+            AtomStr = atom_to_list(Atom),
+            case string:split(AtomStr, "zone_manager_") of
+                ["", ZoneName] -> ZoneName;
+                _ -> "unknown"
+            end;
+        _ -> "unknown"
+    end,
+    {ok, ordered, #{id => PkgId, zone_manager => ZoneManager, zone => Zone}}.
 
 assign_courier(PkgId, Courier) ->
     io:format("API: Assigning courier ~p to package ~p~n", [Courier, PkgId]),
@@ -38,7 +49,9 @@ update_status(PkgId, Status) ->
 %% מצב ordered – ממתין להקצאת שליח
 handle_event(cast, {assign_courier, Courier}, ordered, Data) ->
     io:format("Package(~p) assigned to courier ~p~n", [maps:get(id, Data), Courier]),
-    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, maps:get(id, Data)}),
+    %% תיקון: שליחת האזור המקורי לשליח
+    Zone = maps:get(zone, Data),
+    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, maps:get(id, Data), Zone}),
     {next_state, assigned, Data#{courier => Courier}};
 
 %% תיקון: חבילה שכבר הוקצתה לא יכולה להיות מוקצית שוב
@@ -57,13 +70,7 @@ handle_event(cast, {update_status, picking_up}, assigned, Data) ->
 handle_event(cast, {update_status, delivered}, in_transit, Data) ->
     io:format("Package(~p) delivered!~n", [maps:get(id, Data)]),
     %% עדכון zone_manager שהחבילה נמסרה
-    ZoneManagerAtom = case maps:get(zone_manager, Data) of
-        Pid when is_pid(Pid) ->
-            %% אם זה Pid, נמצא את ה-atom המתאים
-            list_to_atom("zone_manager_north"); % ברירת מחדל
-        Atom when is_atom(Atom) ->
-            Atom
-    end,
+    ZoneManagerAtom = maps:get(zone_manager, Data),
     gen_statem:cast(ZoneManagerAtom, {package_delivered, maps:get(id, Data), maps:get(courier, Data)}),
     {next_state, delivered, Data};
 
@@ -96,7 +103,9 @@ handle_event(cast, {update_status, Status}, CurrentState, Data) ->
 %% מצב failed - נכשל, יכול להיות מוקצה מחדש
 handle_event(cast, {assign_courier, Courier}, failed, Data) ->
     io:format("Package(~p) reassigned to courier ~p after failure~n", [maps:get(id, Data), Courier]),
-    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, maps:get(id, Data)}),
+    %% תיקון: שליחת האזור המקורי לשליח
+    Zone = maps:get(zone, Data),
+    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, maps:get(id, Data), Zone}),
     {next_state, assigned, Data#{courier => Courier}};
 
 handle_event(cast, {cancel}, failed, Data) ->
