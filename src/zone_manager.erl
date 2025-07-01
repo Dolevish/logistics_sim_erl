@@ -97,26 +97,40 @@ handle_event(cast, {courier_available, CourierId}, monitoring, Data) ->
     debug_state(Data),
     io:format("Zone(~p): Courier ~p is now available~n", [maps:get(zone, Data), CourierId]),
     Waiting = maps:get(waiting_packages, Data),
-    case Waiting of
+    %% תיקון: נקה חבילות שכבר לא זקוקות לשליח מהתור
+    CleanWaiting = lists:filter(fun(Pkg) ->
+        case whereis(list_to_atom("package_" ++ Pkg)) of
+            undefined -> true; % חבילה לא נוצרה, תישאר בתור
+            PackagePid ->
+                %% בדיקה פשוטה - אם יש לחבילה שליח במפת הנתונים, היא כבר הוקצתה
+                try gen_statem:call(PackagePid, get_state, 100) of
+                    ordered -> true;  % עדיין זקוקה לשליח
+                    _ -> false        % כבר הוקצתה
+                catch
+                    _:_ -> true % אם יש בעיה, השאר בתור
+                end
+        end
+    end, Waiting),
+    
+    case CleanWaiting of
         [Pkg | RestPkgs] ->
             io:format("Zone(~p): Assigns waiting package ~p to courier ~p~n", [maps:get(zone, Data), Pkg, CourierId]),
-            %% תיקון: בדיקה אם תהליך החבילה כבר קיים ובאיזה מצב
+            %% וידוא שתהליך החבילה קיים
             case whereis(list_to_atom("package_" ++ Pkg)) of
                 undefined ->
-                    %% אם תהליך החבילה לא קיים, ניצור אותו
-                    {ok, _Pid} = package:start_link(Pkg, self()),
-                    package:assign_courier(Pkg, CourierId);
+                    {ok, _Pid} = package:start_link(Pkg, self());
                 _Pid ->
-                    %% התהליך כבר קיים - רק נקצה את השליח
-                    package:assign_courier(Pkg, CourierId)
+                    ok
             end,
+            package:assign_courier(Pkg, CourierId),
             NewData = Data#{waiting_packages => RestPkgs},
             debug_state(NewData),
             {keep_state, NewData};
         [] ->
             Avail = maps:get(available_couriers, Data),
-            NewData = Data#{available_couriers => Avail ++ [CourierId]},
+            NewData = Data#{available_couriers => Avail ++ [CourierId], waiting_packages => CleanWaiting},
             debug_state(NewData),
+            io:format("Zone(~p): Courier ~p is now waiting for next delivery (no packages in queue)~n", [maps:get(zone, Data), CourierId]),
             {keep_state, NewData}
     end;
 

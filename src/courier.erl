@@ -2,7 +2,7 @@
 %% מודול שליח (Courier) - FSM
 %% כל תהליך שליח מייצג שליח אמיתי במערכת
 %% עם התקדמות אוטומטית בין המצבים (כולל דיליי רנדומלי)
-%% תיקון: שינוי ל-handle_event mode כדי לפתור את בעיית ה-cast
+%% עדכון: שליחים לא חוזרים לדפו - נשארים זמינים במקום המסירה
 %% -----------------------------------------------------------
 
 -module(courier).
@@ -20,14 +20,14 @@
 start_link(CourierId) ->
     gen_statem:start_link({local, list_to_atom("courier_" ++ CourierId)}, ?MODULE, [CourierId], []).
 
-%% תיקון: שינוי ל-handle_event mode
+%% שינוי ל-handle_event mode
 callback_mode() -> handle_event_function.
 
 %% -----------------------------------------------------------
 %% פונקציית init – אתחול התהליך במצב idle
 %% -----------------------------------------------------------
 init([CourierId]) ->
-    io:format("Courier ~p starting idle...~n", [CourierId]),
+    io:format("Courier ~p starting idle, waiting for delivery assignments...~n", [CourierId]),
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
     %% zone_manager קבוע (אפשר להרחיב בהמשך)
@@ -39,12 +39,12 @@ init([CourierId]) ->
 
 %% מצב idle – שליח ממתין לקבלת משלוח חדש
 handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
-    io:format("Courier(~p) assigned to pick up package ~p!~n", [maps:get(id, Data), PackageId]),
+    io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [maps:get(id, Data), PackageId]),
     %% עדכון סטטוס חבילה
     package:update_status(PackageId, picking_up),
-    %% זמן איסוף רנדומלי בין 10 ל-60 שניות
+    %% זמן נסיעה למסעדה רנדומלי בין 10 ל-60 שניות
     PickupMs = rand_time(),
-    io:format("Courier(~p) will pick up package ~p in ~p ms~n", [maps:get(id, Data), PackageId, PickupMs]),
+    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [maps:get(id, Data), PackageId, PickupMs]),
     erlang:send_after(PickupMs, self(), pickup_complete),
     {next_state, picking_up, Data#{package => PackageId}};
 
@@ -56,30 +56,22 @@ handle_event(cast, {assign_delivery, PackageId}, StateName, Data) when StateName
     gen_statem:cast(ZoneManager, {assignment_failed, PackageId, maps:get(id, Data)}),
     {keep_state, Data};
 
-%% מצב picking_up – שליח אוסף את החבילה
+%% מצב picking_up – שליח נוסע למסעדה לאיסוף
 handle_event(info, pickup_complete, picking_up, Data) ->
-    io:format("Courier(~p) picked up package ~p, starting delivery!~n", [maps:get(id, Data), maps:get(package, Data)]),
+    io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [maps:get(id, Data), maps:get(package, Data)]),
     package:update_status(maps:get(package, Data), in_transit),
-    %% זמן משלוח רנדומלי בין 10 ל-60 שניות
+    %% זמן נסיעה ללקוח רנדומלי בין 10 ל-60 שניות
     DeliveryMs = rand_time(),
-    io:format("Courier(~p) will deliver package ~p in ~p ms~n", [maps:get(id, Data), maps:get(package, Data), DeliveryMs]),
+    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [maps:get(id, Data), maps:get(package, Data), DeliveryMs]),
     erlang:send_after(DeliveryMs, self(), delivery_complete),
     {next_state, delivering, Data};
 
 %% מצב delivering – שליח בדרכו ללקוח
 handle_event(info, delivery_complete, delivering, Data) ->
-    io:format("Courier(~p) delivered package ~p, returning to depot!~n", [maps:get(id, Data), maps:get(package, Data)]),
+    io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [maps:get(id, Data), maps:get(package, Data)]),
     package:update_status(maps:get(package, Data), delivered),
-    %% זמן חזרה לדפו רנדומלי בין 10 ל-60 שניות
-    ReturnMs = rand_time(),
-    io:format("Courier(~p) will return to depot in ~p ms~n", [maps:get(id, Data), ReturnMs]),
-    erlang:send_after(ReturnMs, self(), depot_reached),
-    {next_state, returning, Data};
-
-%% מצב returning – שליח חוזר לדפו
-handle_event(info, depot_reached, returning, Data) ->
-    io:format("Courier(~p) returned to depot, ready for next delivery!~n", [maps:get(id, Data)]),
-    %% עדכון אוטומטי של zone_manager שהוא פנוי
+    %% תיקון: במקום לחזור לדפו, השליח זמין מיד למשלוח הבא
+    %% עדכון אוטומטי של zone_manager שהוא פנוי וזמין
     gen_statem:cast(maps:get(zone_manager, Data), {courier_available, maps:get(id, Data)}),
     {next_state, idle, maps:remove(package, Data)};
 
@@ -88,7 +80,17 @@ handle_event(EventType, Event, moving_zone, Data) ->
     io:format("Courier(~p) moving_zone: ~p (~p)~n", [maps:get(id, Data), Event, EventType]),
     {keep_state, Data};
 
-%% catch-all לאירועים לא מזוהים
+%% catch-all לאירועים לא מזוהים - כולל הודעות debug
+handle_event(EventType, Event, idle, Data) when EventType =/= cast orelse element(1, Event) =/= assign_delivery ->
+    %% הודעה שקטה יותר - רק אם זה לא assign_delivery רגיל
+    case {EventType, Event} of
+        {info, _} -> 
+            io:format("Courier(~p) idle at delivery location, waiting for next assignment...~n", [maps:get(id, Data)]);
+        _ -> 
+            ok
+    end,
+    {keep_state, Data};
+
 handle_event(EventType, Event, StateName, Data) ->
     io:format("Courier(~p) in state ~p received unhandled event: ~p (~p)~n", 
               [maps:get(id, Data), StateName, Event, EventType]),
@@ -106,3 +108,4 @@ rand_time() ->
 %% -----------------------------------------------------------
 terminate(_Reason, _State, _Data) -> ok.
 code_change(_OldVsn, State, Data, _Extra) -> {ok, State, Data}.
+

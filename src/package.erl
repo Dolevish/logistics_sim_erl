@@ -108,6 +108,10 @@ handle_event(cast, Event, delivered, Data) ->
     io:format("Package(~p) delivered (final): ~p~n", [maps:get(id, Data), Event]),
     {keep_state, Data};
 
+%% API לקבלת מצב החבילה
+handle_event({call, From}, get_state, StateName, Data) ->
+    {keep_state, Data, [{reply, From, StateName}]};
+
 %% catch-all לאירועים לא מזוהים
 handle_event(EventType, Event, StateName, Data) ->
     io:format("Package(~p) in state ~p received unhandled event: ~p (~p)~n", 
