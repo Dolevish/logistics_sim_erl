@@ -287,10 +287,11 @@ handle_event(cast, {transfer_package, PackageId, ToZone}, load_balancing, Data) 
 
 %% קבלת סטטיסטיקות האזור
 handle_event({call, From}, get_stats, _StateName, Data) ->
+    WaitingPackages = maps:get(waiting_packages, Data, []),
     Stats = #{
         zone => maps:get(zone, Data),
-        available_couriers => length(maps:get(available_couriers, Data, [])),
-        waiting_packages => length(maps:get(waiting_packages, Data)),
+        waiting_packages => WaitingPackages,  %% רשימת השמות של החבילות
+        waiting_count => length(WaitingPackages),  %% מספר החבילות
         active_deliveries => maps:get(active_deliveries, Data, 0),
         total_deliveries => maps:get(total_deliveries, Data, 0),
         failed_deliveries => maps:get(failed_deliveries, Data, 0)

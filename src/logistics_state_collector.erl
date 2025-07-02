@@ -1,5 +1,5 @@
 %% -----------------------------------------------------------
-%% מודול איסוף מצב המערכת (State Collector)
+%% מודול איסוף מצב המערכת (State Collector) - מתוקן
 %% אוסף מידע מכל הרכיבים במערכת ומפיץ עדכונים ל-WebSocket handlers
 %% משמש כ-Event Bus מרכזי לעדכוני UI
 %% -----------------------------------------------------------
@@ -104,16 +104,24 @@ handle_cast({unsubscribe, HandlerPid}, State) ->
     NewState = State#{subscribers => lists:delete(HandlerPid, Subscribers)},
     {noreply, NewState};
 
-%% טיפול בעדכון מצב שליח
+%% טיפול בעדכון מצב שליח - מתוקן לשמור נכון את total_delivered
 handle_cast({courier_update, CourierId, NewState}, State) ->
     io:format("State Collector: Courier ~p state changed to ~p~n", [CourierId, NewState]),
     
+    %% קבלת המידע הקיים
+    ExistingInfo = case ets:lookup(courier_states, CourierId) of
+        [{_, Info}] -> Info;
+        [] -> #{}
+    end,
+    
+    %% בניית המידע המעודכן עם שמירה נכונה של total_delivered
+    UpdatedInfo = build_courier_info(CourierId, NewState, ExistingInfo),
+    
     %% שמירת המצב החדש ב-ETS
-    CourierInfo = build_courier_info(CourierId, NewState),
-    ets:insert(courier_states, {CourierId, CourierInfo}),
+    ets:insert(courier_states, {CourierId, UpdatedInfo}),
     
     %% שליחת עדכון לכל המנויים
-    broadcast_update(<<"courier_update">>, CourierInfo, State),
+    broadcast_update(<<"courier_update">>, UpdatedInfo, State),
     
     %% עדכון המונה
     Counter = maps:get(update_counter, State),
@@ -233,56 +241,110 @@ init_courier_states() ->
             delivered_packages => [],
             total_delivered => 0,
             zone => null,
-            eta => null
+            eta => null,
+            last_update => erlang:system_time(second)
         },
         ets:insert(courier_states, {CourierId, InitialInfo})
     end, CourierIds).
 
-%% בניית מידע על שליח
-build_courier_info(CourierId, State) ->
-    %% קבלת המידע הקיים
-    BaseInfo = case ets:lookup(courier_states, CourierId) of
-        [{_, Info}] -> Info;
-        [] -> #{}
+%% בניית מידע על שליח - מתוקן לשמור נכון את total_delivered
+build_courier_info(CourierId, NewState, ExistingInfo) ->
+    %% מחלץ את הנתונים החדשים
+    NewStatus = maps:get(status, NewState, idle),
+    NewPackage = maps:get(package, NewState, null),
+    NewZone = maps:get(zone, NewState, null),
+    NewEta = maps:get(eta, NewState, null),
+    NewTotalDelivered = maps:get(total_delivered, NewState, undefined),
+    NewDeliveredPackages = maps:get(delivered_packages, NewState, undefined),
+    
+    %% מחלץ את הנתונים הקיימים
+    ExistingTotalDelivered = maps:get(total_delivered, ExistingInfo, 0),
+    ExistingDeliveredPackages = maps:get(delivered_packages, ExistingInfo, []),
+    
+    %% קביעת total_delivered הנכון
+    FinalTotalDelivered = case NewTotalDelivered of
+        undefined -> 
+            %% אם לא הגיע מספר חדש, שמור את הקיים
+            ExistingTotalDelivered;
+        NewTotal -> 
+            %% אם הגיע מספר חדש, השתמש בו
+            NewTotal
     end,
     
-    %% עדכון לפי ה-State החדש
-    maps:merge(BaseInfo, #{
-        id => list_to_binary(CourierId),
-        status => list_to_binary(atom_to_list(maps:get(status, State, idle))),
-        current_package => case maps:get(package, State, null) of
+    %% קביעת delivered_packages הנכון
+    FinalDeliveredPackages = case NewDeliveredPackages of
+        undefined -> 
+            %% אם לא הגיעה רשימה חדשה, שמור את הקיימת
+            ExistingDeliveredPackages;
+        NewList -> 
+            %% אם הגיעה רשימה חדשה, השתמש בה
+            NewList
+    end,
+    
+    %% פונקציה עזר להמרה ל-binary בצורה בטוחה
+    ToBinary = fun(Val) ->
+        case Val of
+            Bin when is_binary(Bin) -> Bin;  %% כבר binary
+            List when is_list(List) -> list_to_binary(List);  %% string
+            Atom when is_atom(Atom) -> atom_to_binary(Atom, utf8);  %% atom
+            Other -> list_to_binary(io_lib:format("~p", [Other]))  %% כל דבר אחר
+        end
+    end,
+    
+    %% בניית המידע המעודכן
+    #{
+        id => ToBinary(CourierId),
+        status => ToBinary(NewStatus),
+        current_package => case NewPackage of
             null -> null;
-            Pkg -> list_to_binary(Pkg)
+            Pkg -> ToBinary(Pkg)
         end,
-        zone => case maps:get(zone, State, null) of
+        zone => case NewZone of
             null -> null;
-            Zone -> list_to_binary(Zone)
+            Zone -> ToBinary(Zone)
         end,
-        eta => maps:get(eta, State, null),
+        eta => NewEta,
+        delivered_packages => [ToBinary(P) || P <- FinalDeliveredPackages],
+        total_delivered => FinalTotalDelivered,
         last_update => erlang:system_time(second)
-    }).
+    }.
 
 %% בניית מידע על חבילה
 build_package_info(PackageId, State) ->
+    %% פונקציה עזר להמרה ל-binary בצורה בטוחה
+    ToBinary = fun(Val) ->
+        case Val of
+            null -> null;
+            Bin when is_binary(Bin) -> Bin;  %% כבר binary
+            List when is_list(List) -> list_to_binary(List);  %% string
+            Atom when is_atom(Atom) -> atom_to_binary(Atom, utf8);  %% atom
+            Other -> list_to_binary(io_lib:format("~p", [Other]))  %% כל דבר אחר
+        end
+    end,
+    
     #{
-        id => list_to_binary(PackageId),
-        status => list_to_binary(atom_to_list(maps:get(status, State, ordered))),
-        courier => case maps:get(courier, State, null) of
-            null -> null;
-            C -> list_to_binary(C)
-        end,
-        zone => case maps:get(zone, State, null) of
-            null -> null;
-            Z -> list_to_binary(Z)
-        end,
+        id => ToBinary(PackageId),
+        status => ToBinary(maps:get(status, State, ordered)),
+        courier => ToBinary(maps:get(courier, State, null)),
+        zone => ToBinary(maps:get(zone, State, null)),
         created_at => maps:get(created_at, State, erlang:system_time(second)),
         last_update => erlang:system_time(second)
     }.
 
 %% בניית מידע על אזור
 build_zone_info(Zone, State) ->
+    %% פונקציה עזר להמרה ל-binary בצורה בטוחה
+    ToBinary = fun(Val) ->
+        case Val of
+            Bin when is_binary(Bin) -> Bin;  %% כבר binary
+            List when is_list(List) -> list_to_binary(List);  %% string
+            Atom when is_atom(Atom) -> atom_to_binary(Atom, utf8);  %% atom
+            Other -> list_to_binary(io_lib:format("~p", [Other]))  %% כל דבר אחר
+        end
+    end,
+    
     #{
-        zone => list_to_binary(Zone),
+        zone => ToBinary(Zone),
         waiting_packages => maps:get(waiting_packages, State, 0),
         active_deliveries => maps:get(active_deliveries, State, 0),
         total_delivered => maps:get(total_delivered, State, 0),

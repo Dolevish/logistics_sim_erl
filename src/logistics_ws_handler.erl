@@ -1,5 +1,5 @@
 %% -----------------------------------------------------------
-%% מודול מטפל WebSocket
+%% מודול מטפל WebSocket - מתוקן לדיווח נכון על total_delivered
 %% מנהל את החיבורים והתקשורת עם הדפדפן
 %% שולח עדכונים בזמן אמת על מצב המערכת
 %% -----------------------------------------------------------
@@ -123,7 +123,7 @@ send_full_state() ->
     
     self() ! {state_update, <<"full_state">>, FullState}.
 
-%% קבלת מצב כל השליחים
+%% קבלת מצב כל השליחים - מתוקן לכלול total_delivered אמיתי
 get_all_courier_states() ->
     %% רשימת כל השליחים במערכת
     CourierIds = ["courier1", "courier2", "courier3", "courier4", 
@@ -139,31 +139,99 @@ get_all_courier_states() ->
                   delivered_packages => [],
                   total_delivered => 0};
             _Pid ->
-                %% TODO: לקרוא למצב השליח האמיתי
-                %% כרגע מחזיר מידע דמה
-                #{id => list_to_binary(CourierId),
-                  status => <<"idle">>,
-                  current_package => null,
-                  delivered_packages => [],
-                  total_delivered => 0}
+                %% נסה לקבל מידע מ-State Collector
+                case logistics_state_collector:get_courier_info(CourierId) of
+                    {ok, Info} ->
+                        %% יש מידע - השתמש בו
+                        Info;
+                    {error, not_found} ->
+                        %% אין מידע - מחזיר ברירת מחדל
+                        #{id => list_to_binary(CourierId),
+                          status => <<"idle">>,
+                          current_package => null,
+                          delivered_packages => [],
+                          total_delivered => 0}
+                end
         end
     end, CourierIds).
 
-%% קבלת מצב כל החבילות
+%% קבלת מצב כל החבילות - מתוקן לכלול חבילות אמיתיות
 get_all_package_states() ->
-    %% TODO: לקרוא לרשימת החבילות האמיתית מה-zone managers
-    %% כרגע מחזיר רשימה ריקה
-    [].
+    %% אוסף חבילות מכל האזורים
+    Zones = ["north", "center", "south"],
+    AllPackages = lists:foldl(fun(Zone, Acc) ->
+        %% נסה לקבל חבילות ממנהל האזור
+        case whereis(list_to_atom("zone_manager_" ++ Zone)) of
+            undefined -> 
+                Acc;
+            ZonePid ->
+                try
+                    %% קבל סטטיסטיקות מהאזור
+                    case gen_statem:call(ZonePid, get_stats, 1000) of
+                        #{waiting_packages := WaitingList} when is_list(WaitingList) ->
+                            %% המר חבילות ממתינות לפורמט הנכון
+                            WaitingPackages = lists:map(fun(PkgId) ->
+                                #{
+                                    id => list_to_binary(PkgId),
+                                    status => <<"ordered">>,
+                                    zone => list_to_binary(Zone),
+                                    courier => null,
+                                    created_at => erlang:system_time(second)
+                                }
+                            end, WaitingList),
+                            Acc ++ WaitingPackages;
+                        _ ->
+                            Acc
+                    end
+                catch
+                    _:_ -> Acc
+                end
+        end
+    end, [], Zones),
+    
+    %% בדוק גם חבילות מ-State Collector אם קיימות
+    StateCollectorPackages = case ets:info(package_states) of
+        undefined -> [];
+        _ ->
+            try
+                ets:foldl(fun({_Id, PackageInfo}, Acc) ->
+                    [PackageInfo | Acc]
+                end, [], package_states)
+            catch
+                _:_ -> []
+            end
+    end,
+    
+    %% מיזוג הרשימות ללא כפילויות
+    CombinedPackages = AllPackages ++ StateCollectorPackages,
+    
+    %% הסרת כפילויות לפי ID
+    UniquePackages = lists:foldl(fun(Package, Acc) ->
+        PackageId = maps:get(id, Package),
+        case lists:any(fun(P) -> maps:get(id, P) == PackageId end, Acc) of
+            true -> Acc;  %% כבר קיים
+            false -> [Package | Acc]  %% חדש
+        end
+    end, [], CombinedPackages),
+    
+    io:format("WebSocket: Found ~p packages total~n", [length(UniquePackages)]),
+    UniquePackages.
 
 %% קבלת מצב כל האזורים
 get_all_zone_states() ->
     Zones = ["north", "center", "south"],
     lists:map(fun(Zone) ->
-        %% TODO: לקרוא למצב האזור האמיתי
-        #{zone => list_to_binary(Zone),
-          waiting_packages => 0,
-          active_deliveries => 0,
-          total_delivered => 0}
+        %% נסה לקבל מידע מ-State Collector
+        case logistics_state_collector:get_zone_info(Zone) of
+            {ok, Info} ->
+                Info;
+            {error, not_found} ->
+                %% ברירת מחדל
+                #{zone => list_to_binary(Zone),
+                  waiting_packages => 0,
+                  active_deliveries => 0,
+                  total_delivered => 0}
+        end
     end, Zones).
 
 %% קבלת סטטיסטיקות המערכת

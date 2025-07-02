@@ -1,6 +1,6 @@
 %% -----------------------------------------------------------
 %% מודול מחולל הזמנות רנדומלי (Random Order Generator)
-%% יוצר חבילה חדשה כל 15 שניות באזור רנדומלי
+%% יוצר חבילה חדשה כל 5 שניות באזור רנדומלי
 %% -----------------------------------------------------------
 -module(random_order_generator).
 -behaviour(gen_server).
@@ -21,8 +21,8 @@ init([]) ->
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
     %% רשימת האזורים
     Zones = ["north", "center", "south"],
-    %% תזמון ישיר עם אינטרוול של 15 שניות
-    DefaultInterval = 15000, %% 15 שניות
+    %% תזמון ישיר עם אינטרוול של 5 שניות
+    DefaultInterval = 5000, %% 5 שניות
     erlang:send_after(DefaultInterval, self(), create_random_order),
     {ok, #{
         zones => Zones,
