@@ -404,15 +404,14 @@ footer {
 
 .zones-container {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
 }
 
 .zone-item {
     background-color: rgba(255,255,255,0.1);
     padding: 1rem;
     border-radius: 6px;
-    text-align: center;
     transition: all 0.3s ease;
 }
 
@@ -422,20 +421,24 @@ footer {
 }
 
 .zone-item h4 {
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
     font-size: 1rem;
+    text-align: center;
 }
 
+/* הערה חדשה: שינוי עיצוב הסטטיסטיקות באזורים לפריסת רשת */
 .zone-stats {
-    display: flex;
-    justify-content: space-around;
-    font-size: 0.85rem;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem 1rem; /* רווח בין שורות ובין עמודות */
+    font-size: 0.9rem;
+    text-align: left;
+    padding: 0 1rem;
 }
 
 .zone-stats span {
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
+    justify-content: space-between;
 }
 
 /* Enhanced Animations */

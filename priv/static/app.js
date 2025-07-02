@@ -36,7 +36,6 @@ function init() {
     connectWebSocket();
     setupEventListeners();
     
-    // Auto-refresh every 30 seconds if disconnected
     setInterval(() => {
         if (!isConnected) {
             console.log('Auto-reconnecting due to disconnect...');
@@ -81,7 +80,6 @@ function connectWebSocket() {
     try {
         ws = new WebSocket(wsUrl);
         
-        // Set timeout for connection
         const connectionTimeout = setTimeout(() => {
             console.log('WebSocket connection timeout');
             if (ws.readyState !== WebSocket.OPEN) {
@@ -97,7 +95,6 @@ function connectWebSocket() {
             updateConnectionStatus(true);
             clearInterval(reconnectInterval);
             
-            // Request full state on connection
             setTimeout(() => {
                 ws.send(JSON.stringify({
                     type: 'request_full_state'
@@ -127,7 +124,6 @@ function connectWebSocket() {
             isConnected = false;
             updateConnectionStatus(false);
             
-            // Enhanced reconnection logic
             if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 const backoffDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
                 console.log(`Attempting to reconnect in ${backoffDelay}ms...`);
@@ -160,13 +156,11 @@ function handleWebSocketMessage(data) {
                 handleStateUpdate(data.update_type, data.data);
                 break;
             case 'heartbeat':
-                // Respond to heartbeat to keep connection alive
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({type: 'pong'}));
                 }
                 break;
             case 'pong':
-                // Keep-alive response
                 console.log('Received pong from server');
                 break;
             default:
@@ -184,71 +178,55 @@ function handleStateUpdate(updateType, data) {
         
         switch (updateType) {
             case 'couriers_init':
-                // Initialize all couriers
                 if (Array.isArray(data)) {
                     data.forEach(courier => {
                         appState.couriers[courier.id] = courier;
                     });
                     renderCouriers();
-                    console.log('Initialized couriers:', Object.keys(appState.couriers));
                 }
                 break;
                 
             case 'packages_init':
-                // Initialize all packages
                 if (Array.isArray(data)) {
                     data.forEach(pkg => {
                         appState.packages[pkg.id] = pkg;
                     });
                     renderPackages();
                     updateStats();
-                    console.log('Initialized packages:', Object.keys(appState.packages));
                 }
                 break;
                 
             case 'courier_update':
-                // Update single courier - merge with existing data
                 if (data && data.id) {
                     const existingCourier = appState.couriers[data.id] || {};
-                    
-                    // Merge new data with existing data, preserving important fields
                     appState.couriers[data.id] = {
                         ...existingCourier,
                         ...data,
-                        // Ensure delivered_packages array is preserved and updated
                         delivered_packages: data.delivered_packages || existingCourier.delivered_packages || [],
-                        // Ensure total_delivered is properly calculated
                         total_delivered: data.total_delivered !== undefined ? 
                             data.total_delivered : 
                             (existingCourier.total_delivered || (data.delivered_packages || existingCourier.delivered_packages || []).length)
                     };
-                    
                     updateCourierDisplay(appState.couriers[data.id]);
-                    console.log('Updated courier:', data.id, appState.couriers[data.id]);
                 }
                 break;
                 
             case 'package_update':
-                // Update single package
                 if (data && data.id) {
                     appState.packages[data.id] = data;
                     updatePackageDisplay(data);
                     updateStats();
-                    console.log('Updated package:', data.id, data);
                 }
                 break;
                 
             case 'zone_update':
-                // Update zone information
                 if (data && data.zone) {
                     appState.zones[data.zone] = data;
                     updateZoneDisplay(data);
-                    console.log('Updated zone:', data.zone, data);
                 }
                 break;
                 
             case 'full_state':
-                // Update entire state
                 console.log('Received full state:', data);
                 
                 if (data.couriers && Array.isArray(data.couriers)) {
@@ -257,7 +235,6 @@ function handleStateUpdate(updateType, data) {
                         appState.couriers[courier.id] = courier;
                     });
                     renderCouriers();
-                    console.log('Full state - couriers updated:', Object.keys(appState.couriers));
                 }
                 
                 if (data.packages && Array.isArray(data.packages)) {
@@ -266,7 +243,6 @@ function handleStateUpdate(updateType, data) {
                         appState.packages[pkg.id] = pkg;
                     });
                     renderPackages();
-                    console.log('Full state - packages updated:', Object.keys(appState.packages));
                 }
                 
                 if (data.zones && Array.isArray(data.zones)) {
@@ -274,7 +250,6 @@ function handleStateUpdate(updateType, data) {
                         appState.zones[zone.zone] = zone;
                         updateZoneDisplay(zone);
                     });
-                    console.log('Full state - zones updated:', Object.keys(appState.zones));
                 }
                 
                 updateStats();
@@ -298,7 +273,6 @@ function sendCommand(action) {
         }
     } else {
         console.warn('WebSocket not connected, cannot send command:', action);
-        // Try to reconnect
         connectWebSocket();
     }
 }
@@ -321,11 +295,10 @@ function updateConnectionStatus(connected) {
     }
 }
 
-// Render all couriers with better error handling
+// Render all couriers
 function renderCouriers() {
     try {
         elements.couriersList.innerHTML = '';
-        
         Object.values(appState.couriers).forEach(courier => {
             try {
                 const courierElement = createCourierElement(courier);
@@ -339,7 +312,7 @@ function renderCouriers() {
     }
 }
 
-// Create courier DOM element with enhanced data display
+// Create courier DOM element
 function createCourierElement(courier) {
     const div = document.createElement('div');
     div.className = `courier-item ${courier.status || 'unknown'}`;
@@ -358,13 +331,12 @@ function createCourierElement(courier) {
         `;
     }
     
-    // Enhanced delivered packages display
     let deliveredHTML = '';
     const deliveredPackages = courier.delivered_packages || [];
     const totalDelivered = courier.total_delivered || deliveredPackages.length || 0;
     
     if (deliveredPackages.length > 0) {
-        const recentDeliveries = deliveredPackages.slice(-3); // Show last 3
+        const recentDeliveries = deliveredPackages.slice(-3);
         deliveredHTML = `<div class="delivered-list">Recent: ${recentDeliveries.join(', ')}</div>`;
     }
     
@@ -410,7 +382,6 @@ function renderPackages() {
     try {
         elements.ordersList.innerHTML = '';
         
-        // Sort packages by creation time (newest first)
         const sortedPackages = Object.values(appState.packages)
             .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
         
@@ -492,10 +463,14 @@ function updateZoneDisplay(zone) {
             const waitingEl = zoneElement.querySelector('.zone-waiting');
             const activeEl = zoneElement.querySelector('.zone-active');
             const deliveredEl = zoneElement.querySelector('.zone-delivered');
+            // הערה חדשה: בחירת האלמנט החדש שהוספנו
+            const totalEl = zoneElement.querySelector('.zone-total');
             
             if (waitingEl) waitingEl.textContent = zone.waiting_packages || 0;
             if (activeEl) activeEl.textContent = zone.active_deliveries || 0;
             if (deliveredEl) deliveredEl.textContent = zone.total_delivered || 0;
+            // הערה חדשה: עדכון התוכן של האלמנט החדש
+            if (totalEl) totalEl.textContent = zone.total_orders || 0;
         }
     } catch (error) {
         console.error('Error updating zone display:', error);
@@ -513,10 +488,6 @@ function updateStats() {
             inTransit: packages.filter(p => ['assigned', 'picking_up', 'in_transit', 'delivering'].includes(p.status)).length,
             delivered: packages.filter(p => p.status === 'delivered').length
         };
-        
-        // Debug log
-        console.log('Stats calculated:', stats);
-        console.log('Package statuses:', packages.map(p => p.status));
         
         elements.totalOrders.textContent = stats.total;
         elements.pendingOrders.textContent = stats.pending;
