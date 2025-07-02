@@ -2,6 +2,7 @@
 %% מודול חבילה (Package) - FSM
 %% כל תהליך חבילה מייצג משלוח יחיד
 %% תיקון: שמירת האזור המקורי והעברתו לשליח
+%% עדכון: הוספת דיווחים ל-State Collector לממשק הגרפי
 %% -----------------------------------------------------------
 
 -module(package).
@@ -32,6 +33,10 @@ init([PkgId, ZoneManager]) ->
             end;
         _ -> "unknown"
     end,
+    
+    %% דיווח למערכת הניטור על יצירת חבילה חדשה
+    report_state_change(PkgId, ordered, #{zone => Zone, created_at => erlang:system_time(second)}),
+    
     {ok, ordered, #{id => PkgId, zone_manager => ZoneManager, zone => Zone}}.
 
 assign_courier(PkgId, Courier) ->
@@ -48,10 +53,15 @@ update_status(PkgId, Status) ->
 
 %% מצב ordered – ממתין להקצאת שליח
 handle_event(cast, {assign_courier, Courier}, ordered, Data) ->
-    io:format("Package(~p) assigned to courier ~p~n", [maps:get(id, Data), Courier]),
+    PkgId = maps:get(id, Data),
+    io:format("Package(~p) assigned to courier ~p~n", [PkgId, Courier]),
     %% תיקון: שליחת האזור המקורי לשליח
     Zone = maps:get(zone, Data),
-    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, maps:get(id, Data), Zone}),
+    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, PkgId, Zone}),
+    
+    %% דיווח למערכת הניטור
+    report_state_change(PkgId, assigned, #{courier => Courier, zone => Zone}),
+    
     {next_state, assigned, Data#{courier => Courier}};
 
 %% תיקון: חבילה שכבר הוקצתה לא יכולה להיות מוקצית שוב
@@ -63,19 +73,44 @@ handle_event(cast, {assign_courier, Courier}, assigned, Data) ->
 
 %% מצב assigned - הוקצה שליח, ממתין לאיסוף
 handle_event(cast, {update_status, picking_up}, assigned, Data) ->
-    io:format("Package(~p) is being picked up~n", [maps:get(id, Data)]),
+    PkgId = maps:get(id, Data),
+    io:format("Package(~p) is being picked up~n", [PkgId]),
+    
+    %% דיווח למערכת הניטור
+    report_state_change(PkgId, picking_up, #{
+        courier => maps:get(courier, Data),
+        zone => maps:get(zone, Data)
+    }),
+    
     {next_state, in_transit, Data};
 
 %% מצב in_transit - בדרך ללקוח
 handle_event(cast, {update_status, delivered}, in_transit, Data) ->
-    io:format("Package(~p) delivered!~n", [maps:get(id, Data)]),
+    PkgId = maps:get(id, Data),
+    io:format("Package(~p) delivered!~n", [PkgId]),
     %% עדכון zone_manager שהחבילה נמסרה
     ZoneManagerAtom = maps:get(zone_manager, Data),
-    gen_statem:cast(ZoneManagerAtom, {package_delivered, maps:get(id, Data), maps:get(courier, Data)}),
+    gen_statem:cast(ZoneManagerAtom, {package_delivered, PkgId, maps:get(courier, Data)}),
+    
+    %% דיווח למערכת הניטור
+    report_state_change(PkgId, delivered, #{
+        courier => maps:get(courier, Data),
+        zone => maps:get(zone, Data),
+        delivered_at => erlang:system_time(second)
+    }),
+    
     {next_state, delivered, Data};
 
 handle_event(cast, {update_status, failed}, in_transit, Data) ->
-    io:format("Package(~p) delivery failed!~n", [maps:get(id, Data)]),
+    PkgId = maps:get(id, Data),
+    io:format("Package(~p) delivery failed!~n", [PkgId]),
+    
+    %% דיווח למערכת הניטור
+    report_state_change(PkgId, failed, #{
+        courier => maps:get(courier, Data, null),
+        zone => maps:get(zone, Data)
+    }),
+    
     {next_state, failed, Data};
 
 %% תיקון: מניעת update status כפול - אם החבילה כבר במצב נכון, התעלם
@@ -102,14 +137,24 @@ handle_event(cast, {update_status, Status}, CurrentState, Data) ->
 
 %% מצב failed - נכשל, יכול להיות מוקצה מחדש
 handle_event(cast, {assign_courier, Courier}, failed, Data) ->
-    io:format("Package(~p) reassigned to courier ~p after failure~n", [maps:get(id, Data), Courier]),
+    PkgId = maps:get(id, Data),
+    io:format("Package(~p) reassigned to courier ~p after failure~n", [PkgId, Courier]),
     %% תיקון: שליחת האזור המקורי לשליח
     Zone = maps:get(zone, Data),
-    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, maps:get(id, Data), Zone}),
+    gen_statem:cast(list_to_atom("courier_" ++ Courier), {assign_delivery, PkgId, Zone}),
+    
+    %% דיווח למערכת הניטור
+    report_state_change(PkgId, assigned, #{courier => Courier, zone => Zone}),
+    
     {next_state, assigned, Data#{courier => Courier}};
 
 handle_event(cast, {cancel}, failed, Data) ->
-    io:format("Package(~p) cancelled after failure~n", [maps:get(id, Data)]),
+    PkgId = maps:get(id, Data),
+    io:format("Package(~p) cancelled after failure~n", [PkgId]),
+    
+    %% דיווח למערכת הניטור
+    report_state_change(PkgId, cancelled, #{zone => maps:get(zone, Data)}),
+    
     {keep_state, Data#{status => cancelled}};
 
 %% מצב delivered - הסופי
@@ -126,6 +171,23 @@ handle_event(EventType, Event, StateName, Data) ->
     io:format("Package(~p) in state ~p received unhandled event: ~p (~p)~n", 
               [maps:get(id, Data), StateName, Event, EventType]),
     {keep_state, Data}.
+
+%% -----------------------------------------------------------
+%% פונקציות עזר
+%% -----------------------------------------------------------
+
+%% דיווח על שינוי מצב למערכת הניטור
+report_state_change(PackageId, NewStatus, AdditionalData) ->
+    %% בדיקה אם State Collector פעיל
+    case whereis(logistics_state_collector) of
+        undefined ->
+            %% אם State Collector לא פעיל, רק נדפיס הודעה
+            io:format("DEBUG: State Collector not available for package ~p state change~n", [PackageId]);
+        _ ->
+            %% שליחת עדכון ל-State Collector
+            StateData = maps:merge(AdditionalData, #{status => NewStatus}),
+            logistics_state_collector:package_state_changed(PackageId, StateData)
+    end.
 
 terminate(_Reason, _State, _Data) -> ok.
 code_change(_OldVsn, State, Data, _Extra) -> {ok, State, Data}.

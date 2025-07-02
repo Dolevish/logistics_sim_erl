@@ -5,7 +5,11 @@
     {mod, {logistics_sim_app, []}},
     {applications, [
         kernel,
-        stdlib
+        stdlib,
+        ranch,
+        cowlib,
+        cowboy,
+        jsx
     ]},
     {env, []},
     {modules, []},

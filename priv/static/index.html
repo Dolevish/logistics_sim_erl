@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logistics Simulator - Live Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>Logistics Simulator Dashboard</h1>
+            <div class="controls">
+                <button id="pauseBtn" class="control-btn">Pause</button>
+                <button id="resumeBtn" class="control-btn" disabled>Resume</button>
+                <button id="emergencyBtn" class="control-btn emergency">Emergency Stop</button>
+                <div class="connection-status">
+                    <span class="status-indicator" id="connectionStatus"></span>
+                    <span id="connectionText">Disconnected</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <!-- Left Panel - Orders/Packages -->
+            <section class="panel left-panel">
+                <h2>Orders Status</h2>
+                <div class="stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Total Orders:</span>
+                        <span class="stat-value" id="totalOrders">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Pending:</span>
+                        <span class="stat-value" id="pendingOrders">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">In Transit:</span>
+                        <span class="stat-value" id="inTransitOrders">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Delivered:</span>
+                        <span class="stat-value" id="deliveredOrders">0</span>
+                    </div>
+                </div>
+                <div class="orders-list" id="ordersList">
+                    <!-- Orders will be populated dynamically -->
+                </div>
+            </section>
+
+            <!-- Right Panel - Couriers -->
+            <section class="panel right-panel">
+                <h2>Couriers Status</h2>
+                <div class="couriers-list" id="couriersList">
+                    <!-- Couriers will be populated dynamically -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer>
+            <div class="zones-status">
+                <h3>Zone Status</h3>
+                <div class="zones-container" id="zonesContainer">
+                    <div class="zone-item" data-zone="north">
+                        <h4>North Zone</h4>
+                        <div class="zone-stats">
+                            <span>Waiting: <span class="zone-waiting">0</span></span>
+                            <span>Active: <span class="zone-active">0</span></span>
+                            <span>Delivered: <span class="zone-delivered">0</span></span>
+                        </div>
+                    </div>
+                    <div class="zone-item" data-zone="center">
+                        <h4>Center Zone</h4>
+                        <div class="zone-stats">
+                            <span>Waiting: <span class="zone-waiting">0</span></span>
+                            <span>Active: <span class="zone-active">0</span></span>
+                            <span>Delivered: <span class="zone-delivered">0</span></span>
+                        </div>
+                    </div>
+                    <div class="zone-item" data-zone="south">
+                        <h4>South Zone</h4>
+                        <div class="zone-stats">
+                            <span>Waiting: <span class="zone-waiting">0</span></span>
+                            <span>Active: <span class="zone-active">0</span></span>
+                            <span>Delivered: <span class="zone-delivered">0</span></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

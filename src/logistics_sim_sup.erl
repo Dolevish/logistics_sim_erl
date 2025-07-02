@@ -2,6 +2,7 @@
 %% מודול הסופרווייזר של המערכת (logistics_sim_sup)
 %% מנהל את כל תהליכי הליבה – Control Center, אזורים, שליחים, Order Generator
 %% תיקון: עדכון הערות לגבי הקצאת שליחים לאזורים
+%% עדכון: הוספת Web Server ו-State Collector לממשק גרפי
 %% -----------------------------------------------------------
 
 -module(logistics_sim_sup).
@@ -26,6 +27,15 @@ init([]) ->
           shutdown => 5000,
           type => worker,
           modules => [control_center]},
+
+        %% State Collector - אוסף מידע מכל הרכיבים לממשק הגרפי
+        %% חייב להיות לפני כל השאר כדי שיוכלו להירשם אליו
+        #{id => logistics_state_collector,
+          start => {logistics_state_collector, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [logistics_state_collector]},
 
         %% Courier Pool Manager - מנהל תור השליחים המרכזי
         %% חייב להיות לפני Zone Managers
@@ -114,14 +124,23 @@ init([]) ->
           restart => permanent,
           shutdown => 5000,
           type => worker,
-          modules => [random_order_generator]}
+          modules => [random_order_generator]},
+
+        %% Web Server - שרת HTTP ו-WebSocket לממשק הגרפי
+        %% מספק ממשק ווב לניטור ושליטה במערכת בזמן אמת
+        #{id => logistics_web_server,
+          start => {logistics_web_server, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [logistics_web_server]}
 
         %% TODO: בעתיד אפשר להוסיף כאן:
-        %% - Web Interface Node - ממשק ווב לניהול המערכת
-        %% - Visualization Node - הצגה גרפית של המערכת בזמן אמת
-        %% - Metrics Collector - איסוף נתונים סטטיסטיים
-        %% - Load Balancer - איזון עומסים בין אזורים
-        %% - Household Processes - תהליכי משקי בית שמייצרים הזמנות
+        %% - Metrics Collector - איסוף נתונים סטטיסטיים מתקדמים
+        %% - Load Balancer - איזון עומסים דינמי בין אזורים
+        %% - Household Processes - תהליכי משקי בית שמייצרים הזמנות ריאליסטיות
+        %% - Route Optimizer - אופטימיזציה של מסלולי שליחים
+        %% - Failure Recovery Manager - ניהול התאוששות מכשלים
     ],
     
     %% שיפור: שיניתי את אסטרטגיית הסופרווייזר להיות יותר סלחנית

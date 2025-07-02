@@ -3,6 +3,7 @@
 %% כל תהליך שליח מייצג שליח אמיתי במערכת
 %% עם התקדמות אוטומטית בין המצבים (כולל דיליי רנדומלי)
 %% עדכון: שליחים זמינים לכל האזורים במערכת
+%% עדכון: הוספת דיווחים ל-State Collector לממשק הגרפי
 %% -----------------------------------------------------------
 
 -module(courier).
@@ -33,7 +34,11 @@ init([CourierId]) ->
     %% רשימת כל האזורים במערכת
     AllZones = ["north", "center", "south"],
     %% השליח לא צריך להודיע שהוא זמין - הוא כבר בתור המרכזי
-    {ok, idle, #{id => CourierId, zones => AllZones}}.
+    
+    %% דיווח למערכת הניטור על אתחול השליח - עם דיליי קטן
+    erlang:send_after(100, self(), {report_initial_state}),
+    
+    {ok, idle, #{id => CourierId, zones => AllZones, delivered_packages => [], total_delivered => 0}}.
 
 %% -----------------------------------------------------------
 %% handle_event - מטפל בכל האירועים במצב אחיד
@@ -41,19 +46,31 @@ init([CourierId]) ->
 
 %% מצב idle – שליח ממתין לקבלת משלוח חדש
 handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
-    io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [maps:get(id, Data), PackageId]),
+    CourierId = maps:get(id, Data),
+    io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [CourierId, PackageId]),
     %% עדכון סטטוס חבילה
     package:update_status(PackageId, picking_up),
     %% זמן נסיעה למסעדה רנדומלי בין 10 ל-60 שניות
     PickupMs = rand_time(),
-    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [maps:get(id, Data), PackageId, PickupMs]),
+    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
+    
+    %% דיווח למערכת הניטור על שינוי המצב
+    report_state_change(CourierId, picking_up, #{package => PackageId, eta => PickupMs}),
+    
     erlang:send_after(PickupMs, self(), pickup_complete),
     {next_state, picking_up, Data#{package => PackageId}};
 
 %% תיקון: מטפל גם במקרה שיש אזור מקור
-handle_event(cast, {assign_delivery, PackageId, _FromZone}, idle, Data) ->
+handle_event(cast, {assign_delivery, PackageId, FromZone}, idle, Data) ->
+    %% דיווח על האזור שממנו הגיעה ההקצאה
+    CourierId = maps:get(id, Data),
+    io:format("Courier(~p) assigned package ~p from zone ~p~n", [CourierId, PackageId, FromZone]),
+    
+    %% עדכון נתוני השליח עם האזור
+    NewData = Data#{zone => FromZone},
+    
     %% קורא לטיפול הרגיל (בלי האזור)
-    handle_event(cast, {assign_delivery, PackageId}, idle, Data);
+    handle_event(cast, {assign_delivery, PackageId}, idle, NewData);
 
 %% תיקון: שליח תפוס לא יכול לקבל הקצאות נוספות
 handle_event(cast, {assign_delivery, PackageId, FromZone}, StateName, Data) when StateName =/= idle ->
@@ -69,25 +86,54 @@ handle_event(cast, {assign_delivery, PackageId, FromZone}, StateName, Data) when
 
 %% מצב picking_up – שליח נוסע למסעדה לאיסוף
 handle_event(info, pickup_complete, picking_up, Data) ->
-    io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [maps:get(id, Data), maps:get(package, Data)]),
-    package:update_status(maps:get(package, Data), in_transit),
+    CourierId = maps:get(id, Data),
+    PackageId = maps:get(package, Data),
+    io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
+    package:update_status(PackageId, in_transit),
     %% זמן נסיעה ללקוח רנדומלי בין 10 ל-60 שניות
     DeliveryMs = rand_time(),
-    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [maps:get(id, Data), maps:get(package, Data), DeliveryMs]),
+    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
+    
+    %% דיווח למערכת הניטור
+    Zone = maps:get(zone, Data, "unknown"),
+    report_state_change(CourierId, delivering, #{package => PackageId, zone => Zone, eta => DeliveryMs}),
+    
     erlang:send_after(DeliveryMs, self(), delivery_complete),
     {next_state, delivering, Data};
 
 %% מצב delivering – שליח בדרכו ללקוח
 handle_event(info, delivery_complete, delivering, Data) ->
-    io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [maps:get(id, Data), maps:get(package, Data)]),
-    package:update_status(maps:get(package, Data), delivered),
-    %% החזר את השליח לתור המרכזי
     CourierId = maps:get(id, Data),
+    PackageId = maps:get(package, Data),
+    io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [CourierId, PackageId]),
+    package:update_status(PackageId, delivered),
+    
+    %% עדכון רשימת החבילות שנמסרו
+    DeliveredPackages = maps:get(delivered_packages, Data),
+    TotalDelivered = maps:get(total_delivered, Data),
+    NewDeliveredPackages = [PackageId | DeliveredPackages],
+    NewTotalDelivered = TotalDelivered + 1,
+    
+    %% דיווח למערכת הניטור על סיום המשלוח
+    report_state_change(CourierId, idle, #{
+        delivered_packages => NewDeliveredPackages, 
+        total_delivered => NewTotalDelivered
+    }),
+    
+    %% החזר את השליח לתור המרכזי
     courier_pool:return_courier(CourierId),
     %% הודע לכל האזורים שאולי יש שליח פנוי (כדי שיבדקו אם יש להם חבילות ממתינות)
     AllZones = maps:get(zones, Data),
     notify_all_zones_available(CourierId, AllZones),
-    {next_state, idle, maps:remove(package, Data)};
+    
+    %% עדכון הנתונים המקומיים
+    NewData = maps:remove(package, Data#{
+        delivered_packages => NewDeliveredPackages,
+        total_delivered => NewTotalDelivered,
+        zone => null
+    }),
+    
+    {next_state, idle, NewData};
 
 %% מצב moving_zone – שמור לעתיד, מעבר אזורים
 handle_event(EventType, Event, moving_zone, Data) ->
@@ -98,6 +144,13 @@ handle_event(EventType, Event, moving_zone, Data) ->
 handle_event(EventType, Event, idle, Data) when EventType =/= cast orelse element(1, Event) =/= assign_delivery ->
     %% הודעה שקטה יותר - רק אם זה לא assign_delivery רגיל
     case {EventType, Event} of
+        {info, {report_initial_state}} ->
+            %% דיווח ראשוני על מצב השליח
+            CourierId = maps:get(id, Data),
+            report_state_change(CourierId, idle, #{
+                delivered_packages => maps:get(delivered_packages, Data),
+                total_delivered => maps:get(total_delivered, Data)
+            });
         {info, _} -> 
             io:format("Courier(~p) idle at delivery location, waiting for next assignment...~n", [maps:get(id, Data)]);
         _ -> 
@@ -130,6 +183,19 @@ notify_all_zones_available(CourierId, Zones) ->
                 zone_manager:courier_available(Zone, CourierId)
         end
     end, Zones).
+
+%% דיווח על שינוי מצב למערכת הניטור
+report_state_change(CourierId, NewStatus, AdditionalData) ->
+    %% בדיקה אם State Collector פעיל
+    case whereis(logistics_state_collector) of
+        undefined ->
+            %% אם State Collector לא פעיל, רק נדפיס הודעה
+            io:format("DEBUG: State Collector not available for courier ~p state change~n", [CourierId]);
+        _ ->
+            %% שליחת עדכון ל-State Collector
+            StateData = maps:merge(AdditionalData, #{status => NewStatus}),
+            logistics_state_collector:courier_state_changed(CourierId, StateData)
+    end.
 
 %% -----------------------------------------------------------
 %% דרישות gen_statem

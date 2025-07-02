@@ -1,10 +1,10 @@
 -module(control_center).
 -behaviour(gen_statem).
 
-%% API - הוספתי פונקציות API נוספות
+
 -export([start_link/0, pause_simulation/0, resume_simulation/0, get_status/0, emergency_stop/0]).
 
-%% Callbacks - הוספתי exports לכל הפונקציות הנדרשות
+
 -export([callback_mode/0, init/1, terminate/3, code_change/4]).
 -export([initializing/3, running/3, paused/3, degraded/3, recovering/3, shutting_down/3, halted/3]).
 
