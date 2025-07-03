@@ -85,20 +85,39 @@ handle_call({start_tracking, CourierId, FromLocationId, ToLocationId, Callback},
     io:format("Location Tracker: Starting tracking for courier ~p from ~p to ~p~n", 
               [CourierId, FromLocationId, ToLocationId]),
     
-    %% בדיקה אם מדובר באותו מיקום
-    if FromLocationId == ToLocationId ->
-        io:format("Location Tracker: Source and destination are the same, triggering immediate arrival~n"),
-        %% הפעלת ה-callback מיד
-        case Callback of
-            {M, F, A} -> spawn(fun() -> apply(M, F, A) end);
-            Fun when is_function(Fun) -> spawn(Fun)
-        end,
-        {reply, {ok, 0}, State};
-    true ->
-        %% קבלת מידע על הלוקיישנים
-        case {map_server:get_location(FromLocationId), map_server:get_location(ToLocationId)} of
-            {{ok, FromLoc}, {ok, ToLoc}} ->
-                %% חישוב המסלול והמרחק
+    %% קבלת מידע על הלוקיישנים
+    case {map_server:get_location(FromLocationId), map_server:get_location(ToLocationId)} of
+        {{ok, FromLoc}, {ok, ToLoc}} ->
+            %% --- התיקון מתחיל כאן ---
+            %% בדיקה אם מדובר באותו מיקום, וטיפול משופר במקרה זה.
+            if FromLocationId == ToLocationId ->
+                io:format("Location Tracker: Source and destination are the same. Triggering immediate arrival.~n"),
+                
+                %% יוצרים רשומת מעקב מלאה שמייצגת הגעה מיידית.
+                %% זה מבטיח שכל הפונקציות שמצפות לרשומה יפעלו כשורה.
+                ArrivalTracking = #tracking{
+                    courier_id = CourierId,
+                    start_location = FromLoc,
+                    end_location = ToLoc,
+                    route = {direct, FromLoc, ToLoc},
+                    total_distance = 0,
+                    traveled_distance = 0,
+                    speed = 0,
+                    start_time = erlang:system_time(second),
+                    estimated_arrival = erlang:system_time(second),
+                    status = arrived,
+                    update_callback = Callback
+                },
+                
+                %% מפעילים את לוגיקת ההגעה באופן ידני.
+                %% זה יעדכן את המיקום הסופי של השליח ויפעיל את ה-callback.
+                handle_arrival(ArrivalTracking),
+                
+                %% מחזירים זמן הגעה של 0 שניות.
+                {reply, {ok, 0}, State};
+            
+            true ->
+                %% הלוגיקה הרגילה לנסיעה עם מרחק.
                 Distance = calculate_distance(FromLoc, ToLoc),
                 Speed = calculate_speed(),
                 EstimatedTime = Distance / Speed,
@@ -124,10 +143,12 @@ handle_call({start_tracking, CourierId, FromLocationId, ToLocationId, Callback},
                 %% עדכון מיקום ראשוני
                 update_courier_position(Tracking),
                 
-                {reply, {ok, EstimatedTime}, State#state{active_trackings = NewTrackings}};
-            _ ->
-                {reply, {error, invalid_locations}, State}
-        end
+                {reply, {ok, EstimatedTime}, State#state{active_trackings = NewTrackings}}
+            end;
+            %% --- סוף התיקון ---
+            
+        _ ->
+            {reply, {error, invalid_locations}, State}
     end;
 
 %% קבלת סטטוס שליח

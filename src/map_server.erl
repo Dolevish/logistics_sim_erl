@@ -11,6 +11,7 @@
 -export([update_courier_position/2, get_courier_position/1, get_all_courier_positions/0]).
 -export([get_business_in_zone/1, get_random_home_in_zone/1]).
 -export([get_route_distance/2, get_neighbors/1]).
+-export([get_random_location/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -31,7 +32,14 @@
 
 %% התחלת השרת
 start_link() ->
+    %% --- התיקון כאן ---
+    %% הקריאה הנכונה ל-gen_server עם 4 ארגומנטים:
+    %% 1. שם התהליך (מקומי)
+    %% 2. שם המודול (?MODULE, כלומר map_server)
+    %% 3. ארגומנטים לפונקציית init (רשימה ריקה)
+    %% 4. אופציות (רשימה ריקה)
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    %% --- סוף התיקון ---
 
 %% אתחול המפה עם 200 בתים (ברירת מחדל)
 initialize_map() ->
@@ -72,6 +80,11 @@ get_business_in_zone(Zone) ->
 %% קבלת בית רנדומלי באזור
 get_random_home_in_zone(Zone) ->
     gen_server:call(?MODULE, {get_random_home_in_zone, Zone}).
+
+%% פונקציה זו מאפשרת לקבל מיקום אקראי כלשהו מהמפה (בית או עסק),
+%% והיא משמשת לאתחול מיקום התחלתי לשליחים.
+get_random_location() ->
+    gen_server:call(?MODULE, get_random_location).
 
 %% קבלת מרחק לאורך מסלול
 get_route_distance(FromId, ToId) ->
@@ -192,6 +205,24 @@ handle_call({get_random_home_in_zone, Zone}, _From, State) ->
                     %% בחר בית רנדומלי
                     RandomHome = lists:nth(rand:uniform(length(Homes)), Homes),
                     {reply, {ok, RandomHome}, State}
+            end
+    end;
+    
+%% טיפול בבקשה למיקום אקראי
+handle_call(get_random_location, _From, State) ->
+    case State#state.initialized of
+        false ->
+            {reply, {error, map_not_initialized}, State};
+        true ->
+            %% לוקחים את כל המיקומים מטבלת ה-ETS
+            AllLocations = ets:tab2list(map_locations),
+            case AllLocations of
+                [] ->
+                    {reply, {error, no_locations_on_map}, State};
+                _ ->
+                    %% בוחרים מיקום אקראי מהרשימה
+                    {_, RandomLocation} = lists:nth(rand:uniform(length(AllLocations)), AllLocations),
+                    {reply, {ok, RandomLocation}, State}
             end
     end;
 
