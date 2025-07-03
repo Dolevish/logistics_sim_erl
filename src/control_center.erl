@@ -78,18 +78,19 @@ idle({call, From}, {start_simulation, Config}, State) ->
 
     %% וידוא שההגדרות משתמשות באזורים הקבועים
     ValidatedConfig = Config#{zones => ?FIXED_ZONES},
-    
+
     %% בדיקה אם המפה מופעלת
     MapEnabled = maps:get(enable_map, Config, false),
-    NumHomes = if 
-        MapEnabled -> maps:get(num_homes, Config, 100);  % עם מפה - מקסימום 100 בתים
+    NumHomes = if
+        MapEnabled -> maps:get(num_homes, Config, 200);  % עם מפה - ברירת מחדל 200 בתים
         true -> 2000  % בלי מפה - 2000 בתים וירטואליים
     end,
-    
+
     %% אתחול המפה אם נדרש
     case MapEnabled of
         true ->
             io:format("Initializing map with ~p homes...~n", [NumHomes]),
+            %% --- התיקון הקריטי כאן: החזרת הקריאה לשרת המפות ---
             case map_server:initialize_map(NumHomes) of
                 {ok, map_initialized} ->
                     io:format("Map initialized successfully~n");
@@ -98,6 +99,7 @@ idle({call, From}, {start_simulation, Config}, State) ->
                     gen_statem:reply(From, {error, "Failed to initialize map"}),
                     {keep_state, State}
             end;
+            %% --- סוף התיקון ---
         false ->
             io:format("Running simulation without map visualization~n")
     end,

@@ -2,7 +2,7 @@
 %% מודול יצירת המפה (Map Generator)
 %% אחראי על יצירת המפה הראשונית עם 200 בתים ו-3 עסקים
 %% יוצר רשת כבישים ריאלית ומחשב מרחקים
-%% -- גרסה מתוקנת עם גרף קשיר --
+%% -- גרסה מתוקנת עם גרף קשיר ופריסה מרווחת --
 %% -----------------------------------------------------------
 -module(map_generator).
 -export([generate_map/0, generate_map/1]).
@@ -14,9 +14,10 @@
 %% API Functions
 %% -----------------------------------------------------------
 
-%% יצירת מפה עם 200 בתים (ברירת מחדל)
+%% --- התיקון כאן: שינוי ברירת המחדל ל-200 בתים ---
 generate_map() ->
     generate_map(200).
+%% --- סוף התיקון ---
 
 %% יצירת מפה עם מספר בתים מותאם אישית
 generate_map(NumHomes) ->
@@ -47,19 +48,20 @@ generate_locations(NumHomes) ->
     HomesPerZone = NumHomes div 3,
     ExtraHomes = NumHomes rem 3,
 
-    %% יצירת בתים לכל אזור
-    NorthHomes = generate_homes_for_zone(north, 1, HomesPerZone + ExtraHomes, 5000, 8000),
+    %% --- התיקון כאן: הרחבת הפריסה על ציר Y ---
+    %% יצירת בתים לכל אזור עם מרווח גדול יותר
+    NorthHomes = generate_homes_for_zone(north, 1, HomesPerZone + ExtraHomes, 5000, 9000),
     CenterHomes = generate_homes_for_zone(center, HomesPerZone + ExtraHomes + 1, HomesPerZone, 5000, 5000),
-    SouthHomes = generate_homes_for_zone(south, HomesPerZone * 2 + ExtraHomes + 1, HomesPerZone, 5000, 2000),
+    SouthHomes = generate_homes_for_zone(south, HomesPerZone * 2 + ExtraHomes + 1, HomesPerZone, 5000, 1000),
 
-    %% יצירת עסקים - אחד במרכז כל אזור
+    %% יצירת עסקים - אחד במרכז כל אזור, גם כן עם מרווח גדול יותר
     Businesses = [
         #location{
             id = "business_north",
             type = business,
             zone = north,
             x = 5000,
-            y = 8500,
+            y = 9500,
             address = "North Business Center, Main St"
         },
         #location{
@@ -75,10 +77,11 @@ generate_locations(NumHomes) ->
             type = business,
             zone = south,
             x = 5000,
-            y = 1500,
+            y = 500,
             address = "South Business Park, Industrial Rd"
         }
     ],
+    %% --- סוף התיקון ---
 
     {NorthHomes ++ CenterHomes ++ SouthHomes, Businesses}.
 
@@ -117,7 +120,6 @@ generate_address(Zone, HomeNum) ->
 %% פונקציות פרטיות - יצירת רשת כבישים
 %% -----------------------------------------------------------
 
-%% --- תיקון: הבטחת גרף קשיר ---
 %% @doc יצירת רשת כבישים המבטיחה שכל הנקודות מקושרות.
 generate_road_network(Locations) ->
     io:format("Generating road network...~n"),
@@ -136,7 +138,6 @@ generate_road_network(Locations) ->
     %% איחוד כל הכבישים והסרת כפילויות.
     AllRoads = HomeToBusinessRoads ++ BusinessToBusinessRoads ++ HomeToHomeRoads,
     remove_duplicate_roads(AllRoads).
-%% --- סוף התיקון ---
 
 %% @doc יצירת כבישים דו-כיווניים מכל בית לעסק באותו אזור.
 generate_home_to_business_roads(Locations) ->
@@ -310,9 +311,9 @@ ensure_ets_tables() ->
         end
     end, Tables).
 
-%% --- התיקון הקריטי כאן ---
-%% @doc בניית מבנה גרף לניווט מהיר, תוך התייחסות לכבישים כדו-כיווניים.
+%% בניית מבנה גרף לניווט מהיר
 build_graph_structure(Locations, Roads) ->
+    %% לכל לוקיישן, שמור רשימה של השכנים והמרחקים
     lists:foreach(fun(Loc) ->
         MyId = Loc#location.id,
         %% מחפשים את כל הכבישים שהמיקום הנוכחי הוא חלק מהם (או כמוצא או כיעד).
@@ -329,7 +330,6 @@ build_graph_structure(Locations, Roads) ->
 
         ets:insert(map_graph, {MyId, Neighbors})
     end, Locations).
-%% --- סוף התיקון ---
 
 %% -----------------------------------------------------------
 %% הדפסת סטטיסטיקות

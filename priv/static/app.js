@@ -137,9 +137,11 @@ function validateFormInputs() {
     const minTravel = parseInt(elements.minTravelTimeInput.value);
     const maxTravel = parseInt(elements.maxTravelTimeInput.value);
 
-    const isValid = numCouriers > 0 && numCouriers <= 50 &&
+    // --- התיקון כאן: הגדלת מגבלת השליחים ---
+    const isValid = numCouriers > 0 && numCouriers <= 200 &&
                    orderInterval > 0 && orderInterval <= 300 &&
                    minTravel > 0 && maxTravel > minTravel;
+    // --- סוף התיקון ---
 
     elements.startSimBtn.disabled = !isValid;
 }
@@ -186,9 +188,9 @@ class MapVisualization {
         this.locations = {};
         this.roads = [];
         this.courierPositions = {};
-        this.scale = 0.09; // Scale factor to fit 10000x10000 grid into 1000x1000 canvas
-        this.offsetX = 50;
-        this.offsetY = 50;
+        this.scale = 0.08; // Scale factor to fit 10000x10000 grid into 1000x1000 canvas
+        this.offsetX = 80;
+        this.offsetY = 70;
         
         // Colors
         this.colors = {
@@ -378,6 +380,7 @@ class MapVisualization {
         });
     }
 
+    // --- התיקון כאן: היפוך התוויות של האזורים ---
     drawLabels() {
         this.ctx.save();
         this.ctx.font = 'bold 16px Arial';
@@ -385,12 +388,15 @@ class MapVisualization {
 
         // Zone labels
         this.ctx.textAlign = 'center';
-        this.ctx.fillText('NORTH ZONE', this.canvas.width / 2, 30);
+        // הציור מתחיל מ-Y=0 (למעלה) ולכן האזור העליון הוא דרום והתחתון הוא צפון במערכת הקואורדינטות של המפה.
+        // אבל מבחינת המשתמש, צפון צריך להיות למעלה.
+        this.ctx.fillText('SOUTH ZONE', this.canvas.width / 2, 30);
         this.ctx.fillText('CENTER ZONE', this.canvas.width / 2, this.canvas.height / 2);
-        this.ctx.fillText('SOUTH ZONE', this.canvas.width / 2, this.canvas.height - 30);
+        this.ctx.fillText('NORTH ZONE', this.canvas.width / 2, this.canvas.height - 30);
 
         this.ctx.restore();
     }
+    // --- סוף התיקון ---
 
     startAnimation() {
         const animate = () => {
