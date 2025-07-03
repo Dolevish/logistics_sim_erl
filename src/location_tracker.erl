@@ -1,6 +1,7 @@
 %% -----------------------------------------------------------
 %% מודול מעקב אחר מיקומי שליחים (Location Tracker)
 %% מנהל את התנועה של שליחים על המפה בזמן אמת
+%% -- גרסה משודרגת עם ניתוב מבוסס גרף --
 %% -----------------------------------------------------------
 -module(location_tracker).
 -behaviour(gen_server).
@@ -16,20 +17,23 @@
 %% כלול את קובץ ה-header עם הגדרות ה-records
 -include("map_records.hrl").
 
-%% רשומת מעקב אחר שליח
+%% --- שינוי והוספת שדות לרשומת המעקב ---
 -record(tracking, {
     courier_id,          % מזהה השליח
-    start_location,      % נקודת מוצא
-    end_location,        % נקודת יעד
-    route,              % המסלול (כרגע פשוט - קו ישר)
-    total_distance,     % מרחק כולל
-    traveled_distance,  % מרחק שנסע
-    speed,              % מהירות נוכחית (מטר/שנייה)
-    start_time,         % זמן התחלת הנסיעה
-    estimated_arrival,  % זמן הגעה משוער
-    status,             % moving | arrived
-    update_callback     % פונקציה להפעיל בהגעה
+    start_location_id,   % מזהה נקודת מוצא
+    end_location_id,     % מזהה נקודת יעד
+    route = [],          % המסלול כרשימת מזהי מיקומים
+    total_route_distance = 0, % מרחק כולל לאורך כל המסלול
+    traveled_distance = 0,    % מרחק כולל שנסע מתחילת המסלול
+    speed,               % מהירות נוכחית (מטר/שנייה)
+    start_time,          % זמן התחלת הנסיעה
+    estimated_arrival,   % זמן הגעה משוער
+    status,              % moving | arrived
+    update_callback,     % פונקציה להפעיל בהגעה
+    current_segment_index = 1, % אינדקס המקטע הנוכחי במסלול
+    distance_on_segment = 0    % מרחק שהשליח עבר על המקטע הנוכחי
 }).
+%% --- סוף השינוי ---
 
 -record(state, {
     active_trackings = #{},  % מעקבים פעילים
@@ -37,7 +41,7 @@
 }).
 
 %% קבועים
--define(UPDATE_INTERVAL, 1000).  % עדכון כל שנייה
+-define(UPDATE_INTERVAL_MS, 1000).  % עדכון כל שנייה (1000 מילי-שניות)
 -define(BASE_SPEED, 11.11).      % מהירות בסיסית: 40 קמ"ש = 11.11 מ/ש
 -define(SPEED_VARIATION, 0.2).   % וריאציה במהירות: ±20%
 
@@ -74,82 +78,54 @@ update_all_positions() ->
 
 init([]) ->
     io:format("Location Tracker starting...~n"),
-    
+
     %% התחלת טיימר לעדכונים תקופתיים
-    Timer = erlang:send_after(?UPDATE_INTERVAL, self(), update_positions),
-    
+    Timer = erlang:send_after(?UPDATE_INTERVAL_MS, self(), update_positions),
+
     {ok, #state{update_timer = Timer}}.
 
 %% התחלת מעקב חדש
 handle_call({start_tracking, CourierId, FromLocationId, ToLocationId, Callback}, _From, State) ->
-    io:format("Location Tracker: Starting tracking for courier ~p from ~p to ~p~n", 
+    io:format("Location Tracker: Starting tracking for courier ~p from ~p to ~p~n",
               [CourierId, FromLocationId, ToLocationId]),
-    
-    %% קבלת מידע על הלוקיישנים
-    case {map_server:get_location(FromLocationId), map_server:get_location(ToLocationId)} of
-        {{ok, FromLoc}, {ok, ToLoc}} ->
-            %% --- התיקון מתחיל כאן ---
-            %% בדיקה אם מדובר באותו מיקום, וטיפול משופר במקרה זה.
-            if FromLocationId == ToLocationId ->
-                io:format("Location Tracker: Source and destination are the same. Triggering immediate arrival.~n"),
-                
-                %% יוצרים רשומת מעקב מלאה שמייצגת הגעה מיידית.
-                %% זה מבטיח שכל הפונקציות שמצפות לרשומה יפעלו כשורה.
-                ArrivalTracking = #tracking{
-                    courier_id = CourierId,
-                    start_location = FromLoc,
-                    end_location = ToLoc,
-                    route = {direct, FromLoc, ToLoc},
-                    total_distance = 0,
-                    traveled_distance = 0,
-                    speed = 0,
-                    start_time = erlang:system_time(second),
-                    estimated_arrival = erlang:system_time(second),
-                    status = arrived,
-                    update_callback = Callback
-                },
-                
-                %% מפעילים את לוגיקת ההגעה באופן ידני.
-                %% זה יעדכן את המיקום הסופי של השליח ויפעיל את ה-callback.
-                handle_arrival(ArrivalTracking),
-                
-                %% מחזירים זמן הגעה של 0 שניות.
-                {reply, {ok, 0}, State};
-            
-            true ->
-                %% הלוגיקה הרגילה לנסיעה עם מרחק.
-                Distance = calculate_distance(FromLoc, ToLoc),
+
+    if FromLocationId == ToLocationId ->
+        %% אם המוצא והיעד זהים, נטפל בזה כמקרה קצה של הגעה מיידית.
+        io:format("Location Tracker: Source and destination are the same. Triggering immediate arrival.~n"),
+        handle_immediate_arrival(CourierId, FromLocationId, Callback),
+        {reply, {ok, 0}, State};
+    true ->
+        %% קוראים לשרת המפה כדי לקבל את המסלול המלא.
+        case map_server:get_route(FromLocationId, ToLocationId) of
+            {ok, Route} ->
+                %% --- לוגיקה חדשה ליצירת מעקב מבוסס מסלול ---
                 Speed = calculate_speed(),
-                EstimatedTime = Distance / Speed,
-                
-                %% יצירת רשומת מעקב
+                {ok, TotalDistance} = calculate_route_distance(Route),
+                EstimatedTime = TotalDistance / Speed,
+
                 Tracking = #tracking{
                     courier_id = CourierId,
-                    start_location = FromLoc,
-                    end_location = ToLoc,
-                    route = {direct, FromLoc, ToLoc}, % כרגע מסלול ישיר
-                    total_distance = Distance,
-                    traveled_distance = 0,
+                    start_location_id = FromLocationId,
+                    end_location_id = ToLocationId,
+                    route = Route,
+                    total_route_distance = TotalDistance,
                     speed = Speed,
                     start_time = erlang:system_time(second),
                     estimated_arrival = erlang:system_time(second) + round(EstimatedTime),
                     status = moving,
                     update_callback = Callback
                 },
-                
-                %% שמירה ברשימת המעקבים
+
                 NewTrackings = maps:put(CourierId, Tracking, State#state.active_trackings),
-                
-                %% עדכון מיקום ראשוני
-                update_courier_position(Tracking),
-                
-                {reply, {ok, EstimatedTime}, State#state{active_trackings = NewTrackings}}
-            end;
-            %% --- סוף התיקון ---
-            
-        _ ->
-            {reply, {error, invalid_locations}, State}
+                update_courier_position(Tracking), % עדכון מיקום ראשוני
+                {reply, {ok, EstimatedTime}, State#state{active_trackings = NewTrackings}};
+                %% --- סוף לוגיקה חדשה ---
+            {error, Reason} ->
+                io:format("Location Tracker: Could not find route for ~p -> ~p. Reason: ~p~n", [FromLocationId, ToLocationId, Reason]),
+                {reply, {error, {no_route_found, Reason}}, State}
+        end
     end;
+
 
 %% קבלת סטטוס שליח
 handle_call({get_courier_status, CourierId}, _From, State) ->
@@ -182,10 +158,10 @@ handle_cast(_Msg, State) ->
 handle_info(update_positions, State) ->
     %% עדכון כל המיקומים
     NewState = update_all_courier_positions(State),
-    
+
     %% תזמון העדכון הבא
-    Timer = erlang:send_after(?UPDATE_INTERVAL, self(), update_positions),
-    
+    Timer = erlang:send_after(?UPDATE_INTERVAL_MS, self(), update_positions),
+
     {noreply, NewState#state{update_timer = Timer}};
 
 handle_info(_Info, State) ->
@@ -204,147 +180,222 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% -----------------------------------------------------------
-%% פונקציות עזר פרטיות
+%% פונקציות עזר פרטיות (חלקן חדשות או שונו)
 %% -----------------------------------------------------------
 
-%% חישוב מרחק בין שתי נקודות
-calculate_distance(FromLoc, ToLoc) ->
-    DX = FromLoc#location.x - ToLoc#location.x,
-    DY = FromLoc#location.y - ToLoc#location.y,
-    math:sqrt(DX*DX + DY*DY).
+%% --- לוגיקת התנועה החדשה ---
 
-%% חישוב מהירות עם וריאציה רנדומלית
-calculate_speed() ->
-    %% מהירות בסיסית עם וריאציה של ±20%
-    Variation = (rand:uniform() * 2 - 1) * ?SPEED_VARIATION,
-    ?BASE_SPEED * (1 + Variation).
-
-%% עדכון מיקומי כל השליחים
+%% @doc פונקציית העל שמעדכנת את המיקום של כל השליחים הפעילים.
 update_all_courier_positions(State) ->
-    %% עבור על כל המעקבים הפעילים
-    UpdatedTrackings = maps:fold(fun(CourierId, Tracking, Acc) ->
-        case Tracking#tracking.status of
-            moving ->
-                %% חישוב התקדמות
-                CurrentTime = erlang:system_time(second),
-                ElapsedTime = CurrentTime - Tracking#tracking.start_time,
-                TraveledDistance = min(Tracking#tracking.speed * ElapsedTime, 
-                                     Tracking#tracking.total_distance),
-                
-                %% עדכון המעקב
-                UpdatedTracking = Tracking#tracking{traveled_distance = TraveledDistance},
-                
-                %% בדיקה אם הגענו ליעד
-                if TraveledDistance >= Tracking#tracking.total_distance ->
-                    %% הגענו!
-                    handle_arrival(UpdatedTracking),
-                    %% הסר מהמעקב או סמן כ-arrived
-                    maps:put(CourierId, UpdatedTracking#tracking{status = arrived}, Acc);
-                true ->
-                    %% עדכון מיקום
-                    update_courier_position(UpdatedTracking),
-                    maps:put(CourierId, UpdatedTracking, Acc)
-                end;
-            arrived ->
-                %% כבר הגיע, לא צריך לעדכן
-                maps:put(CourierId, Tracking, Acc)
-        end
-    end, #{}, State#state.active_trackings),
-    
+    %% מחשבים את המרחק שהשליחים צריכים לעבור בפעימה הנוכחית.
+    DistanceThisTick = ?BASE_SPEED * (?UPDATE_INTERVAL_MS / 1000),
+
+    UpdatedTrackings = maps:map(
+        fun(_CourierId, Tracking) ->
+            case Tracking#tracking.status of
+                moving ->
+                    %% עבור כל שליח בתנועה, קוראים לפונקציה הרקורסיבית שמזיזה אותו.
+                    move_courier(Tracking, DistanceThisTick);
+                arrived ->
+                    %% שליח שהגיע נשאר במקומו.
+                    Tracking
+            end
+        end,
+        State#state.active_trackings
+    ),
+
     State#state{active_trackings = UpdatedTrackings}.
 
-%% עדכון מיקום שליח בודד
-update_courier_position(Tracking) ->
-    %% חישוב המיקום הנוכחי על המסלול
-    Progress = case Tracking#tracking.total_distance of
-        0 -> 1.0;
-        0.0 -> 1.0;
-        D when D > 0 -> min(1.0, Tracking#tracking.traveled_distance / D);
-        _ -> 1.0
-    end,
-    
-    %% חישוב קואורדינטות (אינטרפולציה לינארית)
-    StartLoc = Tracking#tracking.start_location,
-    EndLoc = Tracking#tracking.end_location,
-    
-    CurrentX = StartLoc#location.x + (EndLoc#location.x - StartLoc#location.x) * Progress,
-    CurrentY = StartLoc#location.y + (EndLoc#location.y - StartLoc#location.y) * Progress,
-    
-    %% חישוב זמן הגעה משוער מעודכן
-    RemainingDistance = max(0, Tracking#tracking.total_distance - Tracking#tracking.traveled_distance),
-    ETA = case Tracking#tracking.speed of
-        0 -> 0;
-        0.0 -> 0;
-        Speed when Speed > 0 -> round(RemainingDistance / Speed);
-        _ -> 0
-    end,
-    
-    %% הכנת נתוני המיקום
-    PositionData = #{
-        position => #{x => round(CurrentX), y => round(CurrentY)},
-        destination => list_to_binary(EndLoc#location.id),
-        destination_address => list_to_binary(EndLoc#location.address),
-        progress => Progress,
-        eta => ETA,
-        speed => round(Tracking#tracking.speed * 3.6), % המרה לקמ"ש
-        status => moving
-    },
-    
-    %% עדכון בmap_server
-    map_server:update_courier_position(Tracking#tracking.courier_id, PositionData).
+%% @doc הפונקציה המרכזית שמזיזה שליח בודד לאורך המסלול שלו.
+move_courier(Tracking, DistanceToMove) ->
+    Route = Tracking#tracking.route,
+    SegmentIndex = Tracking#tracking.current_segment_index,
 
-%% טיפול בהגעה ליעד
+    if SegmentIndex >= length(Route) ->
+        %% אם השליח כבר נמצא במקטע האחרון (או מעבר), נטפל בו כהגעה.
+        handle_arrival(Tracking);
+    true ->
+        FromNodeId = lists:nth(SegmentIndex, Route),
+        ToNodeId = lists:nth(SegmentIndex + 1, Route),
+
+        {ok, SegmentDistance} = get_segment_distance(FromNodeId, ToNodeId),
+
+        RemainingOnSegment = SegmentDistance - Tracking#tracking.distance_on_segment,
+
+        if DistanceToMove >= RemainingOnSegment ->
+            %% השליח יסיים את המקטע הנוכחי בפעימה זו.
+            LeftoverDistance = DistanceToMove - RemainingOnSegment,
+            NewTracking = Tracking#tracking{
+                current_segment_index = SegmentIndex + 1,
+                distance_on_segment = 0,
+                traveled_distance = Tracking#tracking.traveled_distance + RemainingOnSegment
+            },
+            %% קוראים לפונקציה שוב באופן רקורסיבי עם יתרת המרחק.
+            move_courier(NewTracking, LeftoverDistance);
+        true ->
+            %% השליח נשאר במקטע הנוכחי.
+            NewDistanceOnSegment = Tracking#tracking.distance_on_segment + DistanceToMove,
+            FinalTracking = Tracking#tracking{
+                distance_on_segment = NewDistanceOnSegment,
+                traveled_distance = Tracking#tracking.traveled_distance + DistanceToMove
+            },
+            %% מעדכנים את מיקום השליח במפה.
+            update_courier_position(FinalTracking),
+            FinalTracking
+        end
+    end.
+
+%% @doc מעדכן את המיקום הסופי של השליח ושולח אותו ל-map_server.
+update_courier_position(Tracking) ->
+    SegmentIndex = Tracking#tracking.current_segment_index,
+    Route = Tracking#tracking.route,
+
+    if SegmentIndex > length(Route) ->
+        %% מקרה קצה אם האינדקס חרג מהגבולות
+        ok;
+    true ->
+        %% --- לוגיקה חדשה לחישוב מיקום על מקטע ---
+        FromNodeId = lists:nth(SegmentIndex, Route),
+        ToNodeId = lists:nth(SegmentIndex + 1, Route),
+
+        case {map_server:get_location(FromNodeId), map_server:get_location(ToNodeId)} of
+            {{ok, FromLoc}, {ok, ToLoc}} ->
+                {ok, SegmentDistance} = get_segment_distance(FromNodeId, ToNodeId),
+                ProgressOnSegment = if
+                    SegmentDistance > 0 -> Tracking#tracking.distance_on_segment / SegmentDistance;
+                    true -> 1.0
+                end,
+
+                %% מבצעים אינטרפולציה לינארית רק על המקטע הנוכחי.
+                CurrentX = FromLoc#location.x + (ToLoc#location.x - FromLoc#location.x) * ProgressOnSegment,
+                CurrentY = FromLoc#location.y + (ToLoc#location.y - FromLoc#location.y) * ProgressOnSegment,
+
+                RemainingDistance = max(0, Tracking#tracking.total_route_distance - Tracking#tracking.traveled_distance),
+                ETA_Seconds = case Tracking#tracking.speed of
+                    S when S > 0 -> round(RemainingDistance / S);
+                    _ -> 0
+                end,
+
+                PositionData = #{
+                    position => #{x => round(CurrentX), y => round(CurrentY)},
+                    destination => list_to_binary(Tracking#tracking.end_location_id),
+                    progress => Tracking#tracking.traveled_distance / Tracking#tracking.total_route_distance,
+                    eta => ETA_Seconds * 1000,
+                    speed => round(Tracking#tracking.speed * 3.6), % המרה לקמ"ש
+                    status => moving
+                },
+                map_server:update_courier_position(Tracking#tracking.courier_id, PositionData);
+            _ ->
+                ok
+        end
+    end.
+
+
+%% @doc מטפל בהגעה ליעד.
 handle_arrival(Tracking) ->
-    io:format("Location Tracker: Courier ~p arrived at ~p!~n", 
-              [Tracking#tracking.courier_id, (Tracking#tracking.end_location)#location.id]),
-    
-    %% עדכון מיקום סופי
-    FinalPosition = #{
-        position => #{
-            x => (Tracking#tracking.end_location)#location.x, 
-            y => (Tracking#tracking.end_location)#location.y
-        },
-        destination => list_to_binary((Tracking#tracking.end_location)#location.id),
-        progress => 1.0,
-        eta => 0,
-        status => arrived
-    },
-    
-    map_server:update_courier_position(Tracking#tracking.courier_id, FinalPosition),
-    
+    io:format("Location Tracker: Courier ~p arrived at ~p!~n",
+              [Tracking#tracking.courier_id, Tracking#tracking.end_location_id]),
+
+    %% עדכון מיקום סופי ומדויק
+    case map_server:get_location(Tracking#tracking.end_location_id) of
+        {ok, FinalLoc} ->
+            FinalPosition = #{
+                position => #{
+                    x => FinalLoc#location.x,
+                    y => FinalLoc#location.y
+                },
+                destination => list_to_binary(Tracking#tracking.end_location_id),
+                progress => 1.0,
+                eta => 0,
+                status => arrived
+            },
+            map_server:update_courier_position(Tracking#tracking.courier_id, FinalPosition);
+        _ -> ok
+    end,
+
     %% הפעלת ה-callback אם קיים
     case Tracking#tracking.update_callback of
         undefined -> ok;
-        {M, F, A} -> 
+        {M, F, A} ->
             spawn(fun() -> apply(M, F, A) end);
         Fun when is_function(Fun) ->
             spawn(Fun)
+    end,
+
+    %% מחזירים את רשומת המעקב עם סטטוס "הגיע".
+    Tracking#tracking{status = arrived}.
+
+%% --- פונקציות עזר קיימות וחדשות ---
+
+%% חישוב מהירות עם וריאציה רנדומלית
+calculate_speed() ->
+    Variation = (rand:uniform() * 2 - 1) * ?SPEED_VARIATION,
+    ?BASE_SPEED * (1 + Variation).
+
+%% @doc מחשב את המרחק הכולל של מסלול (רשימת צמתים).
+calculate_route_distance([_]) -> {ok, 0};
+calculate_route_distance([H1, H2 | T]) ->
+    case get_segment_distance(H1, H2) of
+        {ok, Dist} ->
+            case calculate_route_distance([H2 | T]) of
+                {ok, RestDist} -> {ok, Dist + RestDist};
+                Error -> Error
+            end;
+        Error -> Error
+    end;
+calculate_route_distance([]) -> {ok, 0}.
+
+
+%% @doc מחלץ את המרחק של מקטע כביש בודד מהגרף.
+get_segment_distance(From, To) ->
+    case ets:lookup(map_graph, From) of
+        [{_, Neighbors}] ->
+            case lists:keyfind(To, 1, Neighbors) of
+                {To, Distance, _Time} -> {ok, Distance};
+                false -> {error, {segment_not_found, From, To}}
+            end;
+        [] -> {error, {node_not_found, From}}
+    end.
+
+%% @doc פונקציית עזר לטיפול בהגעה מיידית כאשר המוצא והיעד זהים.
+handle_immediate_arrival(CourierId, LocationId, Callback) ->
+    case map_server:get_location(LocationId) of
+        {ok, Loc} ->
+            PositionData = #{
+                position => #{x => Loc#location.x, y => Loc#location.y},
+                destination => list_to_binary(LocationId),
+                progress => 1.0,
+                eta => 0,
+                status => arrived
+            },
+            map_server:update_courier_position(CourierId, PositionData);
+        _ -> ok
+    end,
+    %% הפעלת ה-callback
+    case Callback of
+        undefined -> ok;
+        {M, F, A} -> spawn(fun() -> apply(M, F, A) end);
+        Fun when is_function(Fun) -> spawn(Fun)
     end.
 
 %% בניית דוח סטטוס
 build_status_report(Tracking) ->
-    Progress = case Tracking#tracking.total_distance of
-        0 -> 1.0;
-        0.0 -> 1.0;
-        D when D > 0 -> min(1.0, Tracking#tracking.traveled_distance / D);
-        _ -> 1.0
-    end,
-    
-    RemainingDistance = max(0, Tracking#tracking.total_distance - Tracking#tracking.traveled_distance),
+    RemainingDistance = max(0, Tracking#tracking.total_route_distance - Tracking#tracking.traveled_distance),
     ETA = case Tracking#tracking.speed of
-        0 -> 0;
-        0.0 -> 0;
-        Speed when Speed > 0 -> round(RemainingDistance / Speed);
+        S when S > 0 -> round(RemainingDistance / S);
         _ -> 0
     end,
-    
+
     #{
         courier_id => Tracking#tracking.courier_id,
-        from => (Tracking#tracking.start_location)#location.id,
-        to => (Tracking#tracking.end_location)#location.id,
-        total_distance => round(Tracking#tracking.total_distance),
+        from => Tracking#tracking.start_location_id,
+        to => Tracking#tracking.end_location_id,
+        total_distance => round(Tracking#tracking.total_route_distance),
         traveled_distance => round(Tracking#tracking.traveled_distance),
-        progress => Progress,
+        progress => if Tracking#tracking.total_route_distance > 0 ->
+                         Tracking#tracking.traveled_distance / Tracking#tracking.total_route_distance;
+                     true -> 1.0
+                  end,
         speed_kmh => round(Tracking#tracking.speed * 3.6),
         eta_seconds => ETA,
         status => Tracking#tracking.status

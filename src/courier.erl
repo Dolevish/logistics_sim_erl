@@ -2,6 +2,7 @@
 %% מודול שליח (Courier) משופר - עם תמיכה במיקומים וניווט
 %% כל תהליך שליח מייצג שליח אמיתי במערכת
 %% עם התקדמות אוטומטית בין המצבים וזמני נסיעה מבוססי מפה
+%% -- גרסה משודרגת עם ניתוב מבוסס גרף --
 %% -----------------------------------------------------------
 
 -module(courier).
@@ -47,7 +48,7 @@ init([CourierId]) ->
 
     %% דיווח למערכת הניטור על אתחול השליח - עם דיליי קטן
     erlang:send_after(100, self(), {report_initial_state}),
-    
+
     %% הגדרת מיקום התחלתי אקראי לשליח כדי למנוע תקיעות במשימה הראשונה.
     %% קוראים לשרת המפה כדי לקבל נקודה אקראית על המפה.
     {InitialLocation, HomeBase} = case map_server:get_random_location() of
@@ -85,14 +86,15 @@ handle_event(cast, resume, StateName, Data) ->
     io:format("Courier ~p resumed in state ~p~n", [maps:get(id, Data), StateName]),
     {keep_state, Data#{paused => false}};
 
-
+%% --- שינוי באופן הטיפול במשימה חדשה ---
 %% מצב idle – שליח ממתין לקבלת משלוח חדש
-handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
+%% כעת מקבלים גם את PackageId וגם את FromZone
+handle_event(cast, {assign_delivery, PackageId, FromZone}, idle, Data) ->
     case maps:get(paused, Data) of
         true -> {keep_state, Data};
         false ->
             CourierId = maps:get(id, Data),
-            io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [CourierId, PackageId]),
+            io:format("Courier(~p) received new assignment: package ~p from zone ~p~n", [CourierId, PackageId, FromZone]),
             
             MapEnabled = case ets:info(simulation_config) of
                 undefined -> false;
@@ -105,24 +107,14 @@ handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
             
             case MapEnabled of
                 true ->
-                    case get_package_locations(PackageId, Data) of
+                    %% משתמשים במיקום הנוכחי של השליח كنقطة מוצא.
+                    CurrentLocation = maps:get(current_location, Data),
+                    case get_package_locations(PackageId, FromZone) of
                         {ok, BusinessLocation, HomeLocation} ->
                             package:update_status(PackageId, picking_up),
                             
-                            CurrentLocation = case maps:get(current_location, Data) of
-                                undefined -> maps:get(home_base, Data);
-                                Loc -> Loc
-                            end,
-                            
-                            %% --- התיקון מתחיל כאן ---
-                            %% יצירת ה-callback הנכון.
-                            %% אנו שומרים את ה-PID של תהליך השליח הנוכחי (self()) במשתנה,
-                            %% כדי שהפונקציה האנונימית (fun) תוכל "ללכוד" אותו.
-                            %% כך, כאשר ה-callback יופעל, הוא ישלח את ההודעה `pickup_complete`
-                            %% ישירות ל-PID של השליח הנכון, ולא לתהליך הזמני.
                             CourierPid = self(),
                             StartCallback = fun() -> CourierPid ! pickup_complete end,
-                            %% --- סוף התיקון ---
 
                             case location_tracker:start_tracking(CourierId, CurrentLocation, BusinessLocation, StartCallback) of
                                 {ok, EstimatedTime} ->
@@ -137,9 +129,10 @@ handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
                                     
                                     {next_state, picking_up, Data#{
                                         package => PackageId,
+                                        zone => FromZone, %% <- שמירת האזור הנוכחי במצב
                                         business_location => BusinessLocation,
-                                        home_location => HomeLocation,
-                                        current_location => CurrentLocation
+                                        home_location => HomeLocation
+                                        %% current_location נשאר כפי שהיה
                                     }};
                                 Error ->
                                     io:format("Courier(~p) failed to start tracking: ~p~n", [CourierId, Error]),
@@ -154,19 +147,13 @@ handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
             end
     end;
 
-handle_event(cast, {assign_delivery, PackageId, FromZone}, idle, Data) ->
-    CourierId = maps:get(id, Data),
-    io:format("Courier(~p) assigned package ~p from zone ~p~n", [CourierId, PackageId, FromZone]),
-    NewData = Data#{zone => FromZone},
-    handle_event(cast, {assign_delivery, PackageId}, idle, NewData);
-
-handle_event(cast, {assign_delivery, PackageId, FromZone}, StateName, Data) when StateName =/= idle ->
-    io:format("Courier(~p) BUSY in state ~p, rejecting package ~p from zone ~p~n",
-              [maps:get(id, Data), StateName, PackageId, FromZone]),
+handle_event(cast, {assign_delivery, _PackageId, FromZone}, StateName, Data) when StateName =/= idle ->
+    io:format("Courier(~p) BUSY in state ~p, rejecting package from zone ~p~n",
+              [maps:get(id, Data), StateName, FromZone]),
     ZoneManager = list_to_atom("zone_manager_" ++ FromZone),
     case whereis(ZoneManager) of
         undefined -> ok;
-        _ -> gen_statem:cast(ZoneManager, {assignment_failed, PackageId, maps:get(id, Data)})
+        _ -> gen_statem:cast(ZoneManager, {assignment_failed, maps:get(package, Data), maps:get(id, Data)})
     end,
     {keep_state, Data};
 
@@ -199,11 +186,8 @@ handle_event(info, pickup_complete, picking_up, Data) ->
                     
                     location_tracker:stop_tracking(CourierId),
                     
-                    %% --- התיקון מתחיל כאן ---
-                    %% גם כאן, יש להבטיח שה-callback למסירה הסופית נשלח ל-PID הנכון.
                     CourierPid = self(),
                     DeliveryCallback = fun() -> CourierPid ! delivery_complete end,
-                    %% --- סוף התיקון ---
 
                     case location_tracker:start_tracking(CourierId, BusinessLocation, HomeLocation, DeliveryCallback) of
                         {ok, EstimatedTime} ->
@@ -272,7 +256,7 @@ handle_event(info, delivery_complete, delivering, Data) ->
                 delivered_packages => NewDeliveredPackages,
                 total_delivered => NewTotalDelivered,
                 zone => null,
-                current_location => HomeLocation,
+                current_location => HomeLocation, %% <- המיקום הנוכחי מתעדכן למיקום המסירה
                 business_location => undefined,
                 home_location => undefined
             }),
@@ -285,7 +269,7 @@ handle_event(EventType, Event, moving_zone, Data) ->
     io:format("Courier(~p) moving_zone: ~p (~p)~n", [maps:get(id, Data), Event, EventType]),
     {keep_state, Data};
 
-handle_event(EventType, Event, idle, Data) when EventType =/= cast orelse element(1, Event) =/= assign_delivery ->
+handle_event(EventType, Event, idle, Data) ->
     case {EventType, Event} of
         {info, {report_initial_state}} ->
             CourierId = maps:get(id, Data),
@@ -309,13 +293,13 @@ handle_event(EventType, Event, StateName, Data) ->
 %% פונקציות עזר
 %% -----------------------------------------------------------
 
-get_package_locations(PackageId, _Data) ->
-    io:format("Courier: Parsing package ID: ~p~n", [PackageId]),
+%% --- שינוי: הפונקציה מקבלת גם את האזור כדי למנוע בלבול ---
+get_package_locations(PackageId, Zone) ->
+    io:format("Courier: Getting locations for package ~p in zone ~p~n", [PackageId, Zone]),
     Tokens = string:tokens(PackageId, "_"),
-    io:format("Courier: Tokens: ~p~n", [Tokens]),
     case find_home_pattern(Tokens) of
-        {ok, Zone, HomeId} ->
-            io:format("Courier: Found pattern - zone: ~p, home: ~p~n", [Zone, HomeId]),
+        {ok, _ZoneFromId, HomeId} ->
+            io:format("Courier: Found home ~p in package ID for zone ~p~n", [HomeId, Zone]),
             case map_server:get_business_in_zone(list_to_atom(Zone)) of
                 {ok, Business} ->
                     io:format("Courier: Will deliver from ~p to ~p~n", [Business#location.id, HomeId]),
@@ -325,24 +309,14 @@ get_package_locations(PackageId, _Data) ->
                     Error
             end;
         {error, _} ->
-            case Tokens of
-                [Zone | _] ->
-                    io:format("Courier: Using fallback - random home in zone ~p~n", [Zone]),
-                    case map_server:get_business_in_zone(list_to_atom(Zone)) of
-                        {ok, Business} ->
-                            case map_server:get_random_home_in_zone(list_to_atom(Zone)) of
-                                {ok, Home} ->
-                                    io:format("Courier: Will deliver from ~p to ~p~n", [Business#location.id, Home#location.id]),
-                                    {ok, Business#location.id, Home#location.id};
-                                Error ->
-                                    Error
-                            end;
-                        Error ->
-                            Error
+            io:format("Courier: Could not find home in package ID, using random home in zone ~p~n", [Zone]),
+            case map_server:get_business_in_zone(list_to_atom(Zone)) of
+                {ok, Business} ->
+                    case map_server:get_random_home_in_zone(list_to_atom(Zone)) of
+                        {ok, Home} -> {ok, Business#location.id, Home#location.id};
+                        Error -> Error
                     end;
-                _ ->
-                    io:format("Courier: Invalid package ID format: ~p~n", [PackageId]),
-                    {error, invalid_package_id}
+                Error -> Error
             end
     end.
 

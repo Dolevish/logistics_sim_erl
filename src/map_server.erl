@@ -1,6 +1,7 @@
 %% -----------------------------------------------------------
 %% מודול שרת המפה (Map Server)
 %% gen_server שמנהל את מצב המפה ומספק API לגישה למידע
+%% -- גרסה משודרגת עם יכולות ניתוב --
 %% -----------------------------------------------------------
 -module(map_server).
 -behaviour(gen_server).
@@ -12,6 +13,8 @@
 -export([get_business_in_zone/1, get_random_home_in_zone/1]).
 -export([get_route_distance/2, get_neighbors/1]).
 -export([get_random_location/0]).
+-export([get_route/2]).
+
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -30,69 +33,51 @@
 %% API Functions
 %% -----------------------------------------------------------
 
-%% התחלת השרת
 start_link() ->
-    %% --- התיקון כאן ---
-    %% הקריאה הנכונה ל-gen_server עם 4 ארגומנטים:
-    %% 1. שם התהליך (מקומי)
-    %% 2. שם המודול (?MODULE, כלומר map_server)
-    %% 3. ארגומנטים לפונקציית init (רשימה ריקה)
-    %% 4. אופציות (רשימה ריקה)
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-    %% --- סוף התיקון ---
 
-%% אתחול המפה עם 200 בתים (ברירת מחדל)
 initialize_map() ->
     gen_server:call(?MODULE, {initialize_map, 200}).
 
-%% אתחול המפה עם מספר בתים מותאם
 initialize_map(NumHomes) ->
     gen_server:call(?MODULE, {initialize_map, NumHomes}).
 
-%% קבלת מידע על לוקיישן
 get_location(LocationId) ->
     gen_server:call(?MODULE, {get_location, LocationId}).
 
-%% קבלת מרחק בין שתי נקודות
 get_distance(FromId, ToId) ->
     gen_server:call(?MODULE, {get_distance, FromId, ToId}).
 
-%% קבלת מידע על אזור
 get_zone_info(Zone) ->
     gen_server:call(?MODULE, {get_zone_info, Zone}).
 
-%% עדכון מיקום שליח
 update_courier_position(CourierId, PositionData) ->
     gen_server:cast(?MODULE, {update_courier_position, CourierId, PositionData}).
 
-%% קבלת מיקום שליח
 get_courier_position(CourierId) ->
     gen_server:call(?MODULE, {get_courier_position, CourierId}).
 
-%% קבלת מיקומי כל השליחים
 get_all_courier_positions() ->
     gen_server:call(?MODULE, get_all_courier_positions).
 
-%% קבלת העסק באזור מסוים
 get_business_in_zone(Zone) ->
     gen_server:call(?MODULE, {get_business_in_zone, Zone}).
 
-%% קבלת בית רנדומלי באזור
 get_random_home_in_zone(Zone) ->
     gen_server:call(?MODULE, {get_random_home_in_zone, Zone}).
 
-%% פונקציה זו מאפשרת לקבל מיקום אקראי כלשהו מהמפה (בית או עסק),
-%% והיא משמשת לאתחול מיקום התחלתי לשליחים.
 get_random_location() ->
     gen_server:call(?MODULE, get_random_location).
 
-%% קבלת מרחק לאורך מסלול
 get_route_distance(FromId, ToId) ->
     gen_server:call(?MODULE, {get_route_distance, FromId, ToId}).
 
-%% קבלת שכנים של נקודה
 get_neighbors(LocationId) ->
     gen_server:call(?MODULE, {get_neighbors, LocationId}).
+
+get_route(FromId, ToId) ->
+    gen_server:call(?MODULE, {get_route, FromId, ToId}).
+
 
 %% -----------------------------------------------------------
 %% gen_server callbacks
@@ -100,22 +85,14 @@ get_neighbors(LocationId) ->
 
 init([]) ->
     io:format("Map Server starting...~n"),
-    
-    %% אתחול מחולל מספרים רנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
-    
     {ok, #state{}}.
 
-%% אתחול המפה
 handle_call({initialize_map, NumHomes}, _From, State) ->
     io:format("Map Server: Initializing map with ~p homes...~n", [NumHomes]),
-    
-    %% יצירת המפה
     case map_generator:generate_map(NumHomes) of
         {ok, MapData} ->
-            %% דיווח לstate collector
             report_map_initialized(MapData),
-            
             {reply, {ok, map_initialized}, State#state{
                 initialized = true,
                 num_homes = NumHomes
@@ -124,7 +101,6 @@ handle_call({initialize_map, NumHomes}, _From, State) ->
             {reply, Error, State}
     end;
 
-%% קבלת מידע על לוקיישן
 handle_call({get_location, LocationId}, _From, State) ->
     case State#state.initialized of
         false ->
@@ -138,7 +114,6 @@ handle_call({get_location, LocationId}, _From, State) ->
             end
     end;
 
-%% קבלת מרחק בין שתי נקודות
 handle_call({get_distance, FromId, ToId}, _From, State) ->
     case State#state.initialized of
         false ->
@@ -148,7 +123,6 @@ handle_call({get_distance, FromId, ToId}, _From, State) ->
             {reply, Distance, State}
     end;
 
-%% קבלת מידע על אזור
 handle_call({get_zone_info, Zone}, _From, State) ->
     case State#state.initialized of
         false ->
@@ -158,7 +132,6 @@ handle_call({get_zone_info, Zone}, _From, State) ->
             {reply, {ok, Info}, State}
     end;
 
-%% קבלת מיקום שליח
 handle_call({get_courier_position, CourierId}, _From, State) ->
     case maps:get(CourierId, State#state.courier_positions, undefined) of
         undefined ->
@@ -167,11 +140,9 @@ handle_call({get_courier_position, CourierId}, _From, State) ->
             {reply, {ok, Position}, State}
     end;
 
-%% קבלת מיקומי כל השליחים
 handle_call(get_all_courier_positions, _From, State) ->
     {reply, {ok, State#state.courier_positions}, State};
 
-%% קבלת העסק באזור
 handle_call({get_business_in_zone, Zone}, _From, State) ->
     case State#state.initialized of
         false ->
@@ -186,53 +157,45 @@ handle_call({get_business_in_zone, Zone}, _From, State) ->
             end
     end;
 
-%% קבלת בית רנדומלי באזור
 handle_call({get_random_home_in_zone, Zone}, _From, State) ->
     case State#state.initialized of
         false ->
             {reply, {error, map_not_initialized}, State};
         true ->
-            %% מצא את כל הבתים באזור
             AllLocations = ets:tab2list(map_locations),
-            HomesInZone = [L || {_, L} <- AllLocations, 
+            HomesInZone = [L || {_, L} <- AllLocations,
                                 L#location.type == home,
                                 L#location.zone == Zone],
-            
+
             case HomesInZone of
                 [] ->
                     {reply, {error, no_homes_in_zone}, State};
                 Homes ->
-                    %% בחר בית רנדומלי
                     RandomHome = lists:nth(rand:uniform(length(Homes)), Homes),
                     {reply, {ok, RandomHome}, State}
             end
     end;
-    
-%% טיפול בבקשה למיקום אקראי
+
 handle_call(get_random_location, _From, State) ->
     case State#state.initialized of
         false ->
             {reply, {error, map_not_initialized}, State};
         true ->
-            %% לוקחים את כל המיקומים מטבלת ה-ETS
             AllLocations = ets:tab2list(map_locations),
             case AllLocations of
                 [] ->
                     {reply, {error, no_locations_on_map}, State};
                 _ ->
-                    %% בוחרים מיקום אקראי מהרשימה
                     {_, RandomLocation} = lists:nth(rand:uniform(length(AllLocations)), AllLocations),
                     {reply, {ok, RandomLocation}, State}
             end
     end;
 
-%% קבלת מרחק לאורך מסלול
 handle_call({get_route_distance, FromId, ToId}, _From, State) ->
     case State#state.initialized of
         false ->
             {reply, {error, map_not_initialized}, State};
         true ->
-            %% כרגע נחזיר מרחק ישיר * 1.3 (כדי לסמלץ נסיעה בכבישים)
             case calculate_direct_distance(FromId, ToId) of
                 {ok, DirectDistance} ->
                     RouteDistance = round(DirectDistance * 1.3),
@@ -242,7 +205,6 @@ handle_call({get_route_distance, FromId, ToId}, _From, State) ->
             end
     end;
 
-%% קבלת שכנים של נקודה
 handle_call({get_neighbors, LocationId}, _From, State) ->
     case State#state.initialized of
         false ->
@@ -256,17 +218,27 @@ handle_call({get_neighbors, LocationId}, _From, State) ->
             end
     end;
 
+handle_call({get_route, FromId, ToId}, _From, State) ->
+    case State#state.initialized of
+        false ->
+            {reply, {error, map_not_initialized}, State};
+        true ->
+            case dijkstra(FromId, ToId) of
+                {ok, Path} ->
+                    io:format("~p: Found route from ~p to ~p: ~p~n", [?MODULE, FromId, ToId, Path]),
+                    {reply, {ok, Path}, State};
+                {error, Reason} ->
+                    io:format("~p: Failed to find route from ~p to ~p: ~p~n", [?MODULE, FromId, ToId, Reason]),
+                    {reply, {error, Reason}, State}
+            end
+    end;
+
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-%% עדכון מיקום שליח
 handle_cast({update_courier_position, CourierId, PositionData}, State) ->
-    %% עדכון המיקום במפה הפנימית
     NewPositions = maps:put(CourierId, PositionData, State#state.courier_positions),
-    
-    %% דיווח לstate collector
     report_courier_position_update(CourierId, PositionData),
-    
     {noreply, State#state{courier_positions = NewPositions}};
 
 handle_cast(_Msg, State) ->
@@ -286,7 +258,6 @@ code_change(_OldVsn, State, _Extra) ->
 %% פונקציות עזר פרטיות
 %% -----------------------------------------------------------
 
-%% חישוב מרחק ישיר בין שתי נקודות
 calculate_direct_distance(FromId, ToId) ->
     case {ets:lookup(map_locations, FromId), ets:lookup(map_locations, ToId)} of
         {[{_, From}], [{_, To}]} ->
@@ -298,16 +269,13 @@ calculate_direct_distance(FromId, ToId) ->
             {error, location_not_found}
     end.
 
-%% קבלת סטטיסטיקות על אזור
 get_zone_statistics(Zone) ->
     AllLocations = ets:tab2list(map_locations),
-    
-    %% ספירת בתים ועסקים באזור
+
     LocationsInZone = [L || {_, L} <- AllLocations, L#location.zone == Zone],
     HomesInZone = [L || L <- LocationsInZone, L#location.type == home],
     BusinessesInZone = [L || L <- LocationsInZone, L#location.type == business],
-    
-    %% חישוב מרכז האזור
+
     {CenterX, CenterY} = case LocationsInZone of
         [] -> {0, 0};
         Locs ->
@@ -315,7 +283,7 @@ get_zone_statistics(Zone) ->
             AvgY = lists:sum([L#location.y || L <- Locs]) div length(Locs),
             {AvgX, AvgY}
     end,
-    
+
     #{
         zone => Zone,
         total_locations => length(LocationsInZone),
@@ -326,28 +294,23 @@ get_zone_statistics(Zone) ->
         business_ids => [B#location.id || B <- BusinessesInZone]
     }.
 
-%% דיווח על אתחול המפה
 report_map_initialized(MapData) ->
     case whereis(logistics_state_collector) of
         undefined ->
             ok;
         _ ->
-            %% שליחת מידע על המפה שנוצרה
             LocationsList = maps:get(locations, MapData, []),
             RoadsList = maps:get(roads, MapData, []),
-            
-            %% הכנת המידע לשליחה
+
             LocationsData = [location_to_map(L) || L <- LocationsList],
             RoadsData = [road_to_map(R) || R <- RoadsList],
-            
-            %% תיקון: במקום לנסות לסריאליז את get_all_zones_info ישירות,
-            %% נשלח רק את הנתונים הבסיסיים
+
             ZonesInfo = #{
                 north => #{zone => <<"north">>},
                 center => #{zone => <<"center">>},
                 south => #{zone => <<"south">>}
             },
-            
+
             Message = jsx:encode(#{
                 type => <<"map_initialized">>,
                 data => #{
@@ -356,28 +319,22 @@ report_map_initialized(MapData) ->
                     zones => ZonesInfo
                 }
             }),
-            
             logistics_state_collector:broadcast_message(Message)
     end.
 
-%% דיווח על עדכון מיקום שליח
 report_courier_position_update(CourierId, PositionData) ->
     case whereis(logistics_state_collector) of
         undefined ->
             ok;
         _ ->
-            %% המרת atoms לbinaries לפני encoding
             SafePositionData = convert_position_data_to_safe(PositionData),
-            
             Message = jsx:encode(#{
                 type => <<"courier_position_update">>,
                 data => maps:merge(#{courier_id => list_to_binary(CourierId)}, SafePositionData)
             }),
-            
             logistics_state_collector:broadcast_message(Message)
     end.
 
-%% המרת position data למבנה בטוח ל-JSON
 convert_position_data_to_safe(PositionData) ->
     maps:fold(fun(Key, Value, Acc) ->
         SafeKey = convert_to_binary(Key),
@@ -385,7 +342,6 @@ convert_position_data_to_safe(PositionData) ->
         maps:put(SafeKey, SafeValue, Acc)
     end, #{}, PositionData).
 
-%% המרת ערך בודד לערך בטוח ל-JSON
 convert_value_to_safe(Value) when is_atom(Value) ->
     atom_to_binary(Value, utf8);
 convert_value_to_safe(Value) when is_list(Value) ->
@@ -404,7 +360,6 @@ convert_value_to_safe(Value) when is_number(Value) ->
 convert_value_to_safe(Value) ->
     list_to_binary(io_lib:format("~p", [Value])).
 
-%% המרת atom או string לbinary
 convert_to_binary(Value) when is_atom(Value) ->
     atom_to_binary(Value, utf8);
 convert_to_binary(Value) when is_list(Value) ->
@@ -414,7 +369,6 @@ convert_to_binary(Value) when is_binary(Value) ->
 convert_to_binary(Value) ->
     list_to_binary(io_lib:format("~p", [Value])).
 
-%% המרת location לmap
 location_to_map(Location) ->
     #{
         id => list_to_binary(Location#location.id),
@@ -425,7 +379,6 @@ location_to_map(Location) ->
         address => list_to_binary(Location#location.address)
     }.
 
-%% המרת road לmap
 road_to_map(Road) ->
     #{
         id => list_to_binary(Road#road.id),
@@ -434,3 +387,72 @@ road_to_map(Road) ->
         distance => Road#road.distance,
         base_time => Road#road.base_time
     }.
+
+%% --- מימוש של אלגוריתם דייקסטרה ---
+
+dijkstra(StartNode, EndNode) ->
+    Nodes = [Id || {Id, _} <- ets:tab2list(map_locations)],
+    Distances = maps:from_list([{Node, infinity} || Node <- Nodes]),
+    DistancesWithStart = maps:put(StartNode, 0, Distances),
+    PriorityQueue = gb_sets:from_list(Nodes),
+    Previous = maps:new(),
+    case dijkstra_loop(EndNode, PriorityQueue, DistancesWithStart, Previous) of
+        {ok, FinalPrev} ->
+            %% --- התיקון כאן: הסרת הקריאה המיותרת ל-lists:reverse/1 ---
+            {ok, reconstruct_path(EndNode, FinalPrev, [])};
+            %% --- סוף התיקון ---
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+dijkstra_loop(EndNode, PQ, Distances, Previous) ->
+    case find_closest_node(PQ, Distances) of
+        {U, _Dist} when U == EndNode ->
+            {ok, Previous};
+        {_U, infinity} ->
+            {error, no_path_found};
+        {U, DistU} ->
+            NewPQ = gb_sets:delete(U, PQ),
+            case ets:lookup(map_graph, U) of
+                [{_, Neighbors}] ->
+                    {NewDistances, NewPrevious} = lists:foldl(
+                        fun({V, EdgeWeight, _}, {D, P}) ->
+                            Alt = DistU + EdgeWeight,
+                            CurrentDistV = maps:get(V, D),
+                            if Alt < CurrentDistV ->
+                                {maps:put(V, Alt, D), maps:put(V, U, P)};
+                               true ->
+                                {D, P}
+                            end
+                        end,
+                        {Distances, Previous},
+                        Neighbors
+                    ),
+                    dijkstra_loop(EndNode, NewPQ, NewDistances, NewPrevious);
+                [] ->
+                    dijkstra_loop(EndNode, NewPQ, Distances, Previous)
+            end;
+        none ->
+            {error, no_path_found}
+    end.
+
+find_closest_node(PQ, Distances) ->
+    gb_sets:fold(
+        fun(Node, Closest) ->
+            {_, ClosestDist} = Closest,
+            Dist = maps:get(Node, Distances),
+            if Dist < ClosestDist -> {Node, Dist};
+               true -> Closest
+            end
+        end,
+        {none, infinity},
+        PQ
+    ).
+
+reconstruct_path(Current, Previous, Path) ->
+    case maps:get(Current, Previous, undefined) of
+        undefined ->
+            [Current | Path];
+        PrevNode ->
+            reconstruct_path(PrevNode, Previous, [Current | Path])
+    end.

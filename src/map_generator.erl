@@ -2,6 +2,7 @@
 %% מודול יצירת המפה (Map Generator)
 %% אחראי על יצירת המפה הראשונית עם 200 בתים ו-3 עסקים
 %% יוצר רשת כבישים ריאלית ומחשב מרחקים
+%% -- גרסה מתוקנת עם גרף קשיר --
 %% -----------------------------------------------------------
 -module(map_generator).
 -export([generate_map/0, generate_map/1]).
@@ -20,20 +21,20 @@ generate_map() ->
 %% יצירת מפה עם מספר בתים מותאם אישית
 generate_map(NumHomes) ->
     io:format("Generating map with ~p homes and 3 businesses...~n", [NumHomes]),
-    
+
     %% יצירת הלוקיישנים (בתים ועסקים)
     {Homes, Businesses} = generate_locations(NumHomes),
     AllLocations = Homes ++ Businesses,
-    
+
     %% יצירת רשת הכבישים
     Roads = generate_road_network(AllLocations),
-    
+
     %% שמירת המפה ב-ETS
     save_map_to_ets(AllLocations, Roads),
-    
+
     %% הדפסת סטטיסטיקות
     print_map_statistics(AllLocations, Roads),
-    
+
     {ok, #{locations => AllLocations, roads => Roads}}.
 
 %% -----------------------------------------------------------
@@ -45,12 +46,12 @@ generate_locations(NumHomes) ->
     %% חלוקת הבתים לאזורים
     HomesPerZone = NumHomes div 3,
     ExtraHomes = NumHomes rem 3,
-    
+
     %% יצירת בתים לכל אזור
     NorthHomes = generate_homes_for_zone(north, 1, HomesPerZone + ExtraHomes, 5000, 8000),
     CenterHomes = generate_homes_for_zone(center, HomesPerZone + ExtraHomes + 1, HomesPerZone, 5000, 5000),
     SouthHomes = generate_homes_for_zone(south, HomesPerZone * 2 + ExtraHomes + 1, HomesPerZone, 5000, 2000),
-    
+
     %% יצירת עסקים - אחד במרכז כל אזור
     Businesses = [
         #location{
@@ -78,7 +79,7 @@ generate_locations(NumHomes) ->
             address = "South Business Park, Industrial Rd"
         }
     ],
-    
+
     {NorthHomes ++ CenterHomes ++ SouthHomes, Businesses}.
 
 %% יצירת בתים לאזור ספציפי
@@ -90,7 +91,7 @@ generate_homes_for_zone(Zone, StartId, Count, CenterX, CenterY) ->
         Radius = 500 + rand:uniform(1500),
         X = round(CenterX + Radius * math:cos(Angle)),
         Y = round(CenterY + Radius * math:sin(Angle)),
-        
+
         #location{
             id = "home_" ++ integer_to_list(StartId + I - 1),
             type = home,
@@ -116,41 +117,35 @@ generate_address(Zone, HomeNum) ->
 %% פונקציות פרטיות - יצירת רשת כבישים
 %% -----------------------------------------------------------
 
-%% יצירת רשת כבישים המחברת את כל הנקודות
+%% --- תיקון: הבטחת גרף קשיר ---
+%% @doc יצירת רשת כבישים המבטיחה שכל הנקודות מקושרות.
 generate_road_network(Locations) ->
     io:format("Generating road network...~n"),
-    
-    %% אסטרטגיה: כל בית מחובר לעסק באזור שלו
-    %% בנוסף, יש כבישים ראשיים בין העסקים
-    %% וכבישים משניים בין בתים קרובים
-    
-    %% כבישים מבתים לעסקים
-    HomeToBusinessRoads = generate_home_to_business_roads(Locations),
-    
-    %% כבישים בין העסקים
-    BusinessToBusinessRoads = generate_business_to_business_roads(Locations),
-    
-    %% כבישים בין בתים קרובים (ליצירת רשת מקושרת)
-    HomeToHomeRoads = generate_nearby_home_roads(Locations),
-    
-    %% איחוד כל הכבישים
-    AllRoads = HomeToBusinessRoads ++ BusinessToBusinessRoads ++ HomeToHomeRoads,
-    
-    %% הסרת כפילויות
-    remove_duplicate_roads(AllRoads).
 
-%% יצירת כבישים מבתים לעסקים באותו אזור
+    %% שלב 1: חיבור כל בית לעסק המרכזי באזור שלו.
+    %% זהו השלב הקריטי שמבטיח שאין "איים" מבודדים.
+    HomeToBusinessRoads = generate_home_to_business_roads(Locations),
+
+    %% שלב 2: יצירת כבישים ראשיים בין העסקים כדי לקשר בין האזורים.
+    BusinessToBusinessRoads = generate_business_to_business_roads(Locations),
+
+    %% שלב 3 (אופציונלי אך מומלץ): הוספת כבישים משניים בין בתים קרובים.
+    %% זה יוצר רשת ריאליסטית יותר עם מסלולים אלטרנטיביים.
+    HomeToHomeRoads = generate_nearby_home_roads(Locations),
+
+    %% איחוד כל הכבישים והסרת כפילויות.
+    AllRoads = HomeToBusinessRoads ++ BusinessToBusinessRoads ++ HomeToHomeRoads,
+    remove_duplicate_roads(AllRoads).
+%% --- סוף התיקון ---
+
+%% @doc יצירת כבישים דו-כיווניים מכל בית לעסק באותו אזור.
 generate_home_to_business_roads(Locations) ->
     Homes = [L || L <- Locations, L#location.type == home],
     Businesses = [L || L <- Locations, L#location.type == business],
-    
+
     lists:flatmap(fun(Home) ->
-        %% מצא את העסק באותו אזור
-        BusinessInZone = lists:filter(fun(B) -> 
-            B#location.zone == Home#location.zone 
-        end, Businesses),
-        
-        %% צור כביש לעסק באזור
+        BusinessInZone = lists:filter(fun(B) -> B#location.zone == Home#location.zone end, Businesses),
+
         case BusinessInZone of
             [Business] ->
                 Distance = calculate_distance(Home, Business),
@@ -162,7 +157,7 @@ generate_home_to_business_roads(Locations) ->
                         distance = Distance,
                         base_time = calculate_base_time(Distance)
                     },
-                    %% כביש דו-כיווני
+                    %% הבטחת כביש דו-כיווני
                     #road{
                         id = Business#location.id ++ "_to_" ++ Home#location.id,
                         from = Business#location.id,
@@ -178,8 +173,7 @@ generate_home_to_business_roads(Locations) ->
 %% יצירת כבישים בין העסקים
 generate_business_to_business_roads(Locations) ->
     Businesses = [L || L <- Locations, L#location.type == business],
-    
-    %% יצירת כבישים בין כל זוג עסקים
+
     lists:flatmap(fun(I) ->
         B1 = lists:nth(I, Businesses),
         lists:flatmap(fun(J) ->
@@ -211,19 +205,18 @@ generate_business_to_business_roads(Locations) ->
 generate_nearby_home_roads(Locations) ->
     Homes = [L || L <- Locations, L#location.type == home],
     MaxDistance = 1000, % מרחק מקסימלי לחיבור בין בתים (במטרים)
-    
+
     lists:flatmap(fun(Home1) ->
-        %% מצא בתים קרובים
         NearbyHomes = lists:filter(fun(Home2) ->
             Home1#location.id =/= Home2#location.id andalso
             calculate_distance(Home1, Home2) =< MaxDistance
         end, Homes),
-        
-        %% צור כבישים לבתים הקרובים (מקסימום 3)
+
+        %% צור כבישים דו-כיווניים לעד 3 הבתים הקרובים ביותר
         ConnectedHomes = lists:sublist(lists:sort(fun(H1, H2) ->
             calculate_distance(Home1, H1) =< calculate_distance(Home1, H2)
         end, NearbyHomes), 3),
-        
+
         lists:flatmap(fun(Home2) ->
             Distance = calculate_distance(Home1, Home2),
             [
@@ -231,6 +224,13 @@ generate_nearby_home_roads(Locations) ->
                     id = Home1#location.id ++ "_to_" ++ Home2#location.id,
                     from = Home1#location.id,
                     to = Home2#location.id,
+                    distance = Distance,
+                    base_time = calculate_base_time(Distance)
+                },
+                #road{
+                    id = Home2#location.id ++ "_to_" ++ Home1#location.id,
+                    from = Home2#location.id,
+                    to = Home1#location.id,
                     distance = Distance,
                     base_time = calculate_base_time(Distance)
                 }
@@ -255,12 +255,13 @@ calculate_base_time(Distance) ->
 
 %% הסרת כבישים כפולים
 remove_duplicate_roads(Roads) ->
-    %% שימוש ב-maps לזיהוי ייחודי של כבישים
     RoadMap = lists:foldl(fun(Road, Map) ->
+        %% המפתח תמיד יהיה הזוג הממוין של נקודות המוצא והיעד,
+        %% כדי למנוע כבישים כפולים בין אותן שתי נקודות.
         Key = {min(Road#road.from, Road#road.to), max(Road#road.from, Road#road.to)},
         maps:put(Key, Road, Map)
     end, #{}, Roads),
-    
+
     maps:values(RoadMap).
 
 %% -----------------------------------------------------------
@@ -270,28 +271,28 @@ remove_duplicate_roads(Roads) ->
 %% שמירת המפה בטבלאות ETS
 save_map_to_ets(Locations, Roads) ->
     io:format("Saving map data to ETS tables...~n"),
-    
+
     %% יצירת טבלאות אם לא קיימות
     ensure_ets_tables(),
-    
+
     %% ניקוי טבלאות קיימות
     ets:delete_all_objects(map_locations),
     ets:delete_all_objects(map_roads),
     ets:delete_all_objects(map_graph),
-    
+
     %% שמירת לוקיישנים
     lists:foreach(fun(Loc) ->
         ets:insert(map_locations, {Loc#location.id, Loc})
     end, Locations),
-    
+
     %% שמירת כבישים
     lists:foreach(fun(Road) ->
         ets:insert(map_roads, {Road#road.id, Road})
     end, Roads),
-    
+
     %% בניית גרף לחיפוש מהיר
     build_graph_structure(Locations, Roads),
-    
+
     io:format("Map data saved successfully~n").
 
 %% וידוא שהטבלאות קיימות
@@ -301,7 +302,7 @@ ensure_ets_tables() ->
         {map_roads, [named_table, public, {keypos, 1}]},
         {map_graph, [named_table, public, {keypos, 1}]}
     ],
-    
+
     lists:foreach(fun({Name, Options}) ->
         case ets:info(Name) of
             undefined -> ets:new(Name, Options);
@@ -309,19 +310,26 @@ ensure_ets_tables() ->
         end
     end, Tables).
 
-%% בניית מבנה גרף לניווט מהיר
+%% --- התיקון הקריטי כאן ---
+%% @doc בניית מבנה גרף לניווט מהיר, תוך התייחסות לכבישים כדו-כיווניים.
 build_graph_structure(Locations, Roads) ->
-    %% לכל לוקיישן, שמור רשימה של השכנים והמרחקים
     lists:foreach(fun(Loc) ->
-        %% מצא את כל הכבישים היוצאים מהלוקיישן
-        OutgoingRoads = [R || R <- Roads, R#road.from == Loc#location.id],
-        
-        %% בנה רשימת שכנים
-        Neighbors = [{R#road.to, R#road.distance, R#road.base_time} || R <- OutgoingRoads],
-        
-        %% שמור ב-ETS
-        ets:insert(map_graph, {Loc#location.id, Neighbors})
+        MyId = Loc#location.id,
+        %% מחפשים את כל הכבישים שהמיקום הנוכחי הוא חלק מהם (או כמוצא או כיעד).
+        RelatedRoads = [R || R <- Roads, R#road.from == MyId orelse R#road.to == MyId],
+
+        Neighbors = lists:map(fun(Road) ->
+            %% אם אני המוצא, השכן הוא היעד. אם אני היעד, השכן הוא המוצא.
+            NeighborId = if
+                Road#road.from == MyId -> Road#road.to;
+                true -> Road#road.from
+            end,
+            {NeighborId, Road#road.distance, Road#road.base_time}
+        end, RelatedRoads),
+
+        ets:insert(map_graph, {MyId, Neighbors})
     end, Locations).
+%% --- סוף התיקון ---
 
 %% -----------------------------------------------------------
 %% הדפסת סטטיסטיקות
@@ -330,12 +338,12 @@ build_graph_structure(Locations, Roads) ->
 print_map_statistics(Locations, Roads) ->
     NumHomes = length([L || L <- Locations, L#location.type == home]),
     NumBusinesses = length([L || L <- Locations, L#location.type == business]),
-    
+
     %% ספירת בתים לפי אזור
     NorthHomes = length([L || L <- Locations, L#location.type == home, L#location.zone == north]),
     CenterHomes = length([L || L <- Locations, L#location.type == home, L#location.zone == center]),
     SouthHomes = length([L || L <- Locations, L#location.type == home, L#location.zone == south]),
-    
+
     io:format("~n=== Map Generation Complete ===~n"),
     io:format("Total Locations: ~p~n", [length(Locations)]),
     io:format("  - Homes: ~p~n", [NumHomes]),
