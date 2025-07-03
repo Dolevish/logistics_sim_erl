@@ -7,6 +7,9 @@ let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
+// הגדרת האזורים הקבועים
+const FIXED_ZONES = ['north', 'center', 'south'];
+
 // Application state
 const appState = {
     simulationState: 'idle', // idle, running, paused
@@ -39,12 +42,11 @@ const elements = {
     
     // Form elements
     configForm: document.getElementById('configForm'),
-    zonesInput: document.getElementById('zones'),
+    // הוסר: zonesInput - כעת האזורים קבועים
     numCouriersInput: document.getElementById('numCouriers'),
     orderIntervalInput: document.getElementById('orderInterval'),
     minTravelTimeInput: document.getElementById('minTravelTime'),
     maxTravelTimeInput: document.getElementById('maxTravelTime'),
-    simulationSpeedInput: document.getElementById('simulationSpeed'),
     
     // Runtime elements
     ordersList: document.getElementById('ordersList'),
@@ -104,14 +106,13 @@ function setupEventListeners() {
 
 // Validate form inputs and enable/disable start button
 function validateFormInputs() {
-    const zones = elements.zonesInput.value.trim();
+    // הוסר: בדיקת zones - כעת הם קבועים
     const numCouriers = parseInt(elements.numCouriersInput.value);
     const orderInterval = parseInt(elements.orderIntervalInput.value);
     const minTravel = parseInt(elements.minTravelTimeInput.value);
     const maxTravel = parseInt(elements.maxTravelTimeInput.value);
     
-    const isValid = zones.length > 0 && 
-                   numCouriers > 0 && numCouriers <= 50 &&
+    const isValid = numCouriers > 0 && numCouriers <= 50 &&
                    orderInterval > 0 && orderInterval <= 300 &&
                    minTravel > 0 && maxTravel > minTravel;
     
@@ -120,20 +121,14 @@ function validateFormInputs() {
 
 // Start simulation with configuration
 function startSimulation() {
-    // Parse zones from input
-    const zonesArray = elements.zonesInput.value
-        .split(',')
-        .map(z => z.trim())
-        .filter(z => z.length > 0);
-    
     // Build configuration object
+    // עכשיו משתמשים באזורים הקבועים במקום לקרוא מהקלט
     const config = {
-        zones: zonesArray,
+        zones: FIXED_ZONES, // שימוש באזורים הקבועים
         num_couriers: parseInt(elements.numCouriersInput.value),
         order_interval: parseInt(elements.orderIntervalInput.value) * 1000, // Convert to ms
         min_travel_time: parseInt(elements.minTravelTimeInput.value) * 1000, // Convert to ms
-        max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000, // Convert to ms
-        simulation_speed: parseFloat(elements.simulationSpeedInput.value)
+        max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000 // Convert to ms
     };
     
     // Store configuration
@@ -231,23 +226,17 @@ function generateZonePanels() {
     console.log('Generating zone panels...');
     elements.zonesContainer.innerHTML = '';
     
-    const zones = appState.configuration.zones || ['north', 'center', 'south'];
+    // תמיד משתמשים באזורים הקבועים
+    const zones = FIXED_ZONES;
     console.log('Zones to generate:', zones);
     
     zones.forEach(zone => {
-        // Handle both string and array formats
-        let zoneName = zone;
-        if (Array.isArray(zone)) {
-            // Convert array of char codes to string
-            zoneName = String.fromCharCode(...zone);
-        }
-        
         const zoneDiv = document.createElement('div');
         zoneDiv.className = 'zone-item';
-        zoneDiv.setAttribute('data-zone', zoneName);
+        zoneDiv.setAttribute('data-zone', zone);
         
         zoneDiv.innerHTML = `
-            <h4>${zoneName.charAt(0).toUpperCase() + zoneName.slice(1)} Zone</h4>
+            <h4>${zone.charAt(0).toUpperCase() + zone.slice(1)} Zone</h4>
             <div class="zone-stats">
                 <span>Total: <span class="zone-total">0</span></span>
                 <span>Waiting: <span class="zone-waiting">0</span></span>
@@ -257,7 +246,7 @@ function generateZonePanels() {
         `;
         
         elements.zonesContainer.appendChild(zoneDiv);
-        console.log('Created zone panel for:', zoneName);
+        console.log('Created zone panel for:', zone);
     });
     
     console.log('Zone panels created:', elements.zonesContainer.children.length);
@@ -361,9 +350,14 @@ function handleWebSocketMessage(data) {
             break;
             
         case 'heartbeat':
+            // תגובה ל-heartbeat מהשרת
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({type: 'pong'}));
             }
+            break;
+            
+        case 'pong':
+            // תגובה מהשרת ל-ping שלנו - אין צורך לעשות כלום
             break;
             
         default:
@@ -377,15 +371,8 @@ function handleSimulationStateUpdate(state, config) {
     console.log('Simulation config:', config);
     
     if (config) {
-        // Fix zones if they come as arrays
-        if (config.zones && Array.isArray(config.zones)) {
-            config.zones = config.zones.map(zone => {
-                if (Array.isArray(zone)) {
-                    return String.fromCharCode(...zone);
-                }
-                return zone;
-            });
-        }
+        // תמיד נשתמש באזורים הקבועים
+        config.zones = FIXED_ZONES;
         appState.configuration = config;
     }
     

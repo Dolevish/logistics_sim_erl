@@ -13,6 +13,9 @@
 %% Callbacks - שינוי ל-handle_event mode
 -export([callback_mode/0, init/1, handle_event/4, terminate/3, code_change/4]).
 
+%% הגדרת האזורים הקבועים
+-define(FIXED_ZONES, ["north", "center", "south"]).
+
 %% -----------------------------------------------------------
 %% יצירת שליח חדש (כולל שם דינמי לפי מזהה)
 %% -----------------------------------------------------------
@@ -30,20 +33,15 @@ init([CourierId]) ->
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
     
-    %% קריאת רשימת האזורים מההגדרות
-    AllZones = case ets:info(simulation_config) of
-        undefined -> ["north", "center", "south"];  % ברירת מחדל
-        _ ->
-            case ets:lookup(simulation_config, zones) of
-                [{zones, Zones}] -> Zones;
-                [] -> ["north", "center", "south"]  % ברירת מחדל
-            end
-    end,
-    
     %% דיווח למערכת הניטור על אתחול השליח - עם דיליי קטן
     erlang:send_after(100, self(), {report_initial_state}),
 
-    {ok, idle, #{id => CourierId, zones => AllZones, delivered_packages => [], total_delivered => 0}}.
+    {ok, idle, #{
+        id => CourierId, 
+        zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
+        delivered_packages => [], 
+        total_delivered => 0
+    }}.
 
 %% -----------------------------------------------------------
 %% handle_event - מטפל בכל האירועים במצב אחיד

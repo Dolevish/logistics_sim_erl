@@ -5,6 +5,9 @@
 -export([callback_mode/0, init/1, terminate/3, code_change/4]).
 -export([idle/3, initializing/3, running/3, paused/3, degraded/3, recovering/3, shutting_down/3, halted/3]).
 
+%% הגדרת האזורים הקבועים
+-define(FIXED_ZONES, ["north", "center", "south"]).
+
 %% -----------------------------------------------------------
 %% API Functions - פונקציות ציבוריות לשליטה במרכז הבקרה
 %% -----------------------------------------------------------
@@ -48,7 +51,7 @@ init([]) ->
     {ok, idle, #{
         simulation_config => #{},
         simulation_sup => undefined,
-        zones => [],
+        zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
         healthy_zones => [],
         failed_zones => [],
         start_time => undefined
@@ -62,18 +65,20 @@ init([]) ->
 idle({call, From}, {start_simulation, Config}, State) ->
     io:format("Starting simulation with config: ~p~n", [Config]),
     
+    %% וידוא שההגדרות משתמשות באזורים הקבועים
+    ValidatedConfig = Config#{zones => ?FIXED_ZONES},
+    
     %% אתחול הסופרווייזר הדינמי
     case start_simulation_supervisor() of
         {ok, SupPid} ->
             %% התחלת רכיבי הסימולציה
-            case start_simulation_components(SupPid, Config) of
+            case start_simulation_components(SupPid, ValidatedConfig) of
                 ok ->
                     %% עדכון המצב עם ההגדרות
-                    Zones = maps:get(zones, Config, ["north", "center", "south"]),
                     NewState = State#{
-                        simulation_config => Config,
+                        simulation_config => ValidatedConfig,
                         simulation_sup => SupPid,
-                        zones => Zones,
+                        zones => ?FIXED_ZONES,
                         start_time => erlang:system_time(second)
                     },
                     
@@ -111,7 +116,7 @@ initializing(cast, {system_start}, State) ->
             %% דיווח למערכת על מצב הסימולציה
             report_simulation_state(running, maps:get(simulation_config, State)),
             
-            {next_state, running, State#{healthy_zones => maps:get(zones, State)}};
+            {next_state, running, State#{healthy_zones => ?FIXED_ZONES}};
         false ->
             io:format("Not all zones ready, retrying in 2 seconds...~n"),
             erlang:send_after(2000, self(), {retry_system_start}),
@@ -128,7 +133,7 @@ initializing(info, {check_zones_health}, State) ->
             %% דיווח למערכת על מצב הסימולציה
             report_simulation_state(running, maps:get(simulation_config, State)),
             
-            {next_state, running, State#{healthy_zones => maps:get(zones, State)}};
+            {next_state, running, State#{healthy_zones => ?FIXED_ZONES}};
         false ->
             erlang:send_after(5000, self(), {check_zones_health}),
             {keep_state, State}
@@ -333,8 +338,8 @@ start_simulation_supervisor() ->
 %% התחלת כל רכיבי הסימולציה
 start_simulation_components(SupPid, Config) ->
     try
-        %% פירוק ההגדרות
-        Zones = maps:get(zones, Config, ["north", "center", "south"]),
+        %% פירוק ההגדרות - תמיד משתמשים באזורים הקבועים
+        Zones = ?FIXED_ZONES,
         NumCouriers = maps:get(num_couriers, Config, 8),
         OrderInterval = maps:get(order_interval, Config, 5000),
         MinTravelTime = maps:get(min_travel_time, Config, 10000),
@@ -354,12 +359,13 @@ start_simulation_components(SupPid, Config) ->
         ets:insert(simulation_config, {order_interval, OrderInterval}),
         ets:insert(simulation_config, {zones, Zones}),
         
+        io:format("Saved configuration with fixed zones: ~p~n", [Zones]),
         io:format("Saved travel times to ETS: Min=~p ms, Max=~p ms~n", [MinTravelTime, MaxTravelTime]),
         
         %% התחלת Courier Pool
         start_courier_pool(SupPid),
         
-        %% התחלת Zone Managers
+        %% התחלת Zone Managers - רק לאזורים הקבועים
         lists:foreach(fun(Zone) ->
             start_zone_manager(SupPid, Zone)
         end, Zones),
@@ -519,7 +525,7 @@ reset_state() ->
     #{
         simulation_config => #{},
         simulation_sup => undefined,
-        zones => [],
+        zones => ?FIXED_ZONES,  %% תמיד האזורים הקבועים
         healthy_zones => [],
         failed_zones => [],
         start_time => undefined
@@ -538,17 +544,17 @@ report_simulation_state(State, Config) ->
 
 %% בדיקה שכל האזורים מוכנים ופעילים
 check_all_zones_ready(State) ->
-    Zones = maps:get(zones, State),
+    %% בודקים רק את האזורים הקבועים
     lists:all(fun(Zone) ->
         case whereis(list_to_atom("zone_manager_" ++ Zone)) of
             undefined -> false;
             _Pid -> true
         end
-    end, Zones).
+    end, ?FIXED_ZONES).
 
 %% בדיקת בריאות האזורים
 check_zones_health(State) ->
-    Zones = maps:get(zones, State),
+    %% בודקים רק את האזורים הקבועים
     lists:filter(fun(Zone) ->
         case whereis(list_to_atom("zone_manager_" ++ Zone)) of
             undefined -> true;
@@ -558,7 +564,7 @@ check_zones_health(State) ->
                     true -> false
                 end
         end
-    end, Zones).
+    end, ?FIXED_ZONES).
 
 %% טיפול בכשל של אזור
 handle_zone_failure(Zone) ->

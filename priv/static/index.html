@@ -38,19 +38,21 @@
             <section id="configPanel" class="config-panel">
                 <h2>Simulation Configuration</h2>
                 <form id="configForm" class="config-form">
-                    <div class="form-group">
-                        <label for="zones">Zones (comma-separated):</label>
-                        <input type="text" id="zones" name="zones" 
-                               value="north, center, south" 
-                               placeholder="e.g., north, center, south, east"
-                               required>
-                        <small>Enter zone names separated by commas</small>
+                    <!-- הוסר: קלט האזורים - כעת האזורים קבועים -->
+                    <div class="zones-info">
+                        <h3>Delivery Zones</h3>
+                        <p>The simulation operates with 3 fixed zones:</p>
+                        <ul class="zones-list">
+                            <li><strong>North Zone</strong> - Northern delivery area</li>
+                            <li><strong>Center Zone</strong> - Central delivery area</li>
+                            <li><strong>South Zone</strong> - Southern delivery area</li>
+                        </ul>
                     </div>
                     
                     <div class="form-group">
                         <label for="numCouriers">Number of Couriers:</label>
                         <input type="number" id="numCouriers" name="numCouriers" 
-                               min="1" max="50" value="8" required>
+                               min="1" max="50" value="4" required>
                         <small>Total number of couriers in the system (1-50)</small>
                     </div>
                     
@@ -65,28 +67,16 @@
                         <div class="form-group half">
                             <label for="minTravelTime">Min Travel Time (seconds):</label>
                             <input type="number" id="minTravelTime" name="minTravelTime" 
-                                   min="5" max="300" value="10" required>
+                                   min="5" max="300" value="14" required>
                             <small>Minimum courier travel time</small>
                         </div>
                         
                         <div class="form-group half">
                             <label for="maxTravelTime">Max Travel Time (seconds):</label>
                             <input type="number" id="maxTravelTime" name="maxTravelTime" 
-                                   min="10" max="600" value="60" required>
+                                   min="10" max="600" value="40" required>
                             <small>Maximum courier travel time</small>
                         </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="simulationSpeed">Simulation Speed:</label>
-                        <select id="simulationSpeed" name="simulationSpeed">
-                            <option value="1">1x (Real-time)</option>
-                            <option value="2">2x (Double speed)</option>
-                            <option value="5" selected>5x (Fast)</option>
-                            <option value="10">10x (Very fast)</option>
-                            <option value="20">20x (Ultra fast)</option>
-                        </select>
-                        <small>Speed multiplier for the simulation</small>
                     </div>
                 </form>
                 

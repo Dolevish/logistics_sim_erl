@@ -9,6 +9,9 @@
 %% Cowboy WebSocket callbacks
 -export([init/2, websocket_init/1, websocket_handle/2, websocket_info/2, terminate/3]).
 
+%% הגדרת האזורים הקבועים
+-define(FIXED_ZONES, ["north", "center", "south"]).
+
 %% -----------------------------------------------------------
 %% Cowboy WebSocket Callbacks
 %% -----------------------------------------------------------
@@ -43,6 +46,10 @@ websocket_handle({text, Msg}, State) ->
             %% תגובה ל-ping
             Response = jsx:encode(#{type => <<"pong">>, timestamp => erlang:system_time(second)}),
             {reply, {text, Response}, State};
+            
+        #{<<"type">> := <<"pong">>} ->
+            %% קיבלנו pong בתגובה ל-heartbeat שלנו - אין צורך לעשות כלום
+            {ok, State};
             
         #{<<"type">> := <<"request_simulation_state">>} ->
             %% הלקוח מבקש את מצב הסימולציה
@@ -189,28 +196,18 @@ handle_client_command(Action, _Cmd) ->
     send_command_response(Action, false, <<"Unknown command">>).
 
 %% חילוץ הגדרות מפקודת הלקוח
+%% כעת תמיד משתמשים באזורים הקבועים
 extract_config_from_command(Cmd) ->
     %% ברירות מחדל
     DefaultConfig = #{
-        zones => ["north", "center", "south"],
+        zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
         num_couriers => 8,
         order_interval => 5000,
         min_travel_time => 10000,
-        max_travel_time => 60000,
-        simulation_speed => 1.0
+        max_travel_time => 60000
     },
     
-    %% חילוץ ערכים מהפקודה
-    Zones = case maps:get(<<"zones">>, Cmd, undefined) of
-        undefined -> maps:get(zones, DefaultConfig);
-        ZoneList when is_list(ZoneList) -> 
-            [case Z of
-                Bin when is_binary(Bin) -> binary_to_list(Bin);
-                List when is_list(List) -> List
-            end || Z <- ZoneList];
-        _ -> maps:get(zones, DefaultConfig)
-    end,
-    
+    %% חילוץ ערכים מהפקודה - ללא zones כי הם קבועים
     NumCouriers = case maps:get(<<"num_couriers">>, Cmd, undefined) of
         undefined -> maps:get(num_couriers, DefaultConfig);
         N when is_integer(N) -> N;
@@ -235,20 +232,13 @@ extract_config_from_command(Cmd) ->
         _ -> maps:get(max_travel_time, DefaultConfig)
     end,
     
-    SimSpeed = case maps:get(<<"simulation_speed">>, Cmd, undefined) of
-        undefined -> maps:get(simulation_speed, DefaultConfig);
-        S when is_number(S) -> S;
-        _ -> maps:get(simulation_speed, DefaultConfig)
-    end,
-    
-    %% החזרת המפה המעודכנת
+    %% החזרת המפה המעודכנת - תמיד עם האזורים הקבועים
     #{
-        zones => Zones,
+        zones => ?FIXED_ZONES,
         num_couriers => NumCouriers,
         order_interval => OrderInterval,
         min_travel_time => MinTravelTime,
-        max_travel_time => MaxTravelTime,
-        simulation_speed => SimSpeed
+        max_travel_time => MaxTravelTime
     }.
 
 %% שליחת תגובה לפקודה

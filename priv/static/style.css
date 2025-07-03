@@ -132,6 +132,44 @@ header h1 {
     padding-bottom: 0.5rem;
 }
 
+/* סגנונות לתצוגת האזורים הקבועים */
+.zones-info {
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    border: 1px solid #e9ecef;
+}
+
+.zones-info h3 {
+    color: #2c3e50;
+    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+}
+
+.zones-info p {
+    color: #6c757d;
+    margin-bottom: 1rem;
+}
+
+.zones-list {
+    list-style: none;
+    padding: 0;
+}
+
+.zones-list li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.zones-list li:last-child {
+    border-bottom: none;
+}
+
+.zones-list strong {
+    color: #2c3e50;
+}
+
 .config-form {
     display: flex;
     flex-direction: column;
@@ -502,7 +540,7 @@ footer {
 
 .zones-container {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: repeat(3, 1fr); /* תמיד 3 עמודות לשלושת האזורים */
     gap: 1.5rem;
 }
 
@@ -631,6 +669,10 @@ footer {
     
     .couriers-list {
         grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    }
+    
+    .zones-container {
+        grid-template-columns: 1fr; /* במסכים קטנים - עמודה אחת */
     }
 }
 

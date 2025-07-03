@@ -1,6 +1,6 @@
 %% -----------------------------------------------------------
-%% מודול מחולל הזמנות רנדומלי משופר - תומך באזורים דינמיים
-%% יוצר חבילה חדשה כל X שניות באזור רנדומלי
+%% מודול מחולל הזמנות רנדומלי משופר - תומך באזורים קבועים
+%% יוצר חבילה חדשה כל X שניות באזור רנדומלי מתוך האזורים הקבועים
 %% -----------------------------------------------------------
 -module(random_order_generator).
 -behaviour(gen_server).
@@ -9,6 +9,9 @@
 -export([start_link/0, init/1, handle_info/2, handle_call/3, handle_cast/2, terminate/2, code_change/3]).
 -export([pause/0, resume/0, set_interval/1, get_stats/0]).
 
+%% הגדרת האזורים הקבועים
+-define(FIXED_ZONES, ["north", "center", "south"]).
+
 %% -----------------------------------------------------------
 %% start_link/0 - מתחיל תהליך מחולל רנדומלי יחיד
 %% -----------------------------------------------------------
@@ -16,28 +19,25 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 init([]) ->
-    io:format("Random Order Generator started!~n"),
+    io:format("Random Order Generator started with fixed zones: ~p~n", [?FIXED_ZONES]),
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
-    
-    %% קריאת רשימת האזורים מההגדרות
-    Zones = get_zones_from_config(),
     
     %% קריאת interval מההגדרות
     DefaultInterval = get_interval_from_config(),
     
-    io:format("Random Order Generator: Using zones ~p with interval ~p ms~n", [Zones, DefaultInterval]),
+    io:format("Random Order Generator: Using fixed zones ~p with interval ~p ms~n", [?FIXED_ZONES, DefaultInterval]),
     
     %% תזמון ישיר
     erlang:send_after(DefaultInterval, self(), create_random_order),
     
-    %% יצירת מפה ריקה למונים לכל אזור
+    %% יצירת מפה ריקה למונים לכל אזור קבוע
     ZoneCounters = lists:foldl(fun(Zone, Acc) ->
         maps:put(list_to_atom(Zone ++ "_orders"), 0, Acc)
-    end, #{}, Zones),
+    end, #{}, ?FIXED_ZONES),
     
     State = maps:merge(#{
-        zones => Zones,
+        zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
         next_id => 1, 
         active => true, 
         interval => DefaultInterval,
@@ -52,8 +52,8 @@ init([]) ->
 handle_info(create_random_order, State) ->
     case maps:get(active, State) of
         true ->
-            %% בחירת אזור רנדומלי
-            Zones = maps:get(zones, State),
+            %% בחירת אזור רנדומלי מתוך האזורים הקבועים
+            Zones = ?FIXED_ZONES,
             RandomZone = lists:nth(rand:uniform(length(Zones)), Zones),
             
             %% יצירת ID ייחודי
@@ -113,8 +113,8 @@ handle_call({set_interval, NewInterval}, _From, State) ->
     {reply, ok, State#{interval => NewInterval}};
 
 handle_call(get_stats, _From, State) ->
-    %% בניית מפת סטטיסטיקות דינמית
-    Zones = maps:get(zones, State),
+    %% בניית מפת סטטיסטיקות דינמית עבור האזורים הקבועים
+    Zones = ?FIXED_ZONES,
     ZoneStats = lists:foldl(fun(Zone, Acc) ->
         ZoneKey = list_to_atom(Zone ++ "_orders"),
         maps:put(Zone, maps:get(ZoneKey, State, 0), Acc)
@@ -155,18 +155,6 @@ get_stats() ->
 %% פונקציות עזר פרטיות
 %% -----------------------------------------------------------
 
-%% קריאת רשימת האזורים מההגדרות
-get_zones_from_config() ->
-    case ets:info(simulation_config) of
-        undefined -> 
-            ["north", "center", "south"];  % ברירת מחדל
-        _ ->
-            case ets:lookup(simulation_config, zones) of
-                [{zones, Zones}] -> Zones;
-                [] -> ["north", "center", "south"]  % ברירת מחדל
-            end
-    end.
-
 %% קריאת interval מההגדרות
 get_interval_from_config() ->
     case ets:info(simulation_config) of
@@ -181,7 +169,7 @@ get_interval_from_config() ->
 
 %% הדפסת סטטיסטיקות
 print_stats(State) ->
-    Zones = maps:get(zones, State),
+    Zones = ?FIXED_ZONES,
     TotalOrders = maps:get(total_orders, State),
     
     io:format("=== Order Stats: Total: ~p ===~n", [TotalOrders]),

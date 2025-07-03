@@ -15,6 +15,9 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+%% הגדרת האזורים הקבועים
+-define(FIXED_ZONES, ["north", "center", "south"]).
+
 %% -----------------------------------------------------------
 %% API Functions
 %% -----------------------------------------------------------
@@ -240,7 +243,7 @@ handle_info(check_system_state, State) ->
         _ ->
             io:format("State Collector: Performing periodic system check~n"),
             check_dynamic_couriers(State),
-            check_dynamic_zones(State)
+            check_fixed_zones(State)  %% שימוש באזורים הקבועים
     end,
     erlang:send_after(5000, self(), check_system_state),
     {noreply, State};
@@ -291,11 +294,9 @@ check_dynamic_couriers(State) ->
         end
     end, lists:seq(1, NumCouriers)).
 
-%% בדיקה דינמית של אזורים (מבוססת על הגדרות)
-check_dynamic_zones(State) ->
-    Config = maps:get(simulation_config, State, #{}),
-    Zones = maps:get(zones, Config, ["north", "center", "south"]),
-    
+%% בדיקה של האזורים הקבועים
+check_fixed_zones(State) ->
+    %% תמיד בודקים את האזורים הקבועים
     lists:foreach(fun(Zone) ->
         case whereis(list_to_atom("zone_manager_" ++ Zone)) of
             undefined -> 
@@ -303,7 +304,7 @@ check_dynamic_zones(State) ->
             _Pid -> 
                 ok
         end
-    end, Zones).
+    end, ?FIXED_ZONES).
 
 build_courier_info(CourierId, NewState, ExistingInfo) ->
     NewStatus = maps:get(status, NewState, idle),
