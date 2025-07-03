@@ -69,7 +69,9 @@ init([CourierId]) ->
         total_delivered => 0,
         paused => false, % הוספת משתנה למצב השהיה
         current_location => InitialLocation, % מיקום נוכחי
-        home_base => HomeBase % בסיס הבית של השליח
+        home_base => HomeBase, % בסיס הבית של השליח
+        %% >> הערה חדשה: הוספת שדה לאירועים שממתינים לעיבוד <<
+        pending_event => undefined
     }}.
 
 %% -----------------------------------------------------------
@@ -81,10 +83,20 @@ handle_event(cast, pause, StateName, Data) ->
     io:format("Courier ~p paused in state ~p~n", [maps:get(id, Data), StateName]),
     {keep_state, Data#{paused => true}};
 
-% טיפול בהמשך
+% >> הערה חדשה: שינוי הטיפול בהמשך הסימולציה <<
 handle_event(cast, resume, StateName, Data) ->
     io:format("Courier ~p resumed in state ~p~n", [maps:get(id, Data), StateName]),
-    {keep_state, Data#{paused => false}};
+    NewData = Data#{paused => false},
+    % בדיקה אם יש אירוע שממתין
+    case maps:get(pending_event, NewData) of
+        undefined ->
+            {keep_state, NewData};
+        PendingEvent ->
+            % אם כן, שולחים אותו לעצמנו לעיבוד מחדש
+            self() ! PendingEvent,
+            {keep_state, NewData#{pending_event => undefined}}
+    end;
+
 
 %% --- שינוי באופן הטיפול במשימה חדשה ---
 %% מצב idle – שליח ממתין לקבלת משלוח חדש
@@ -157,12 +169,12 @@ handle_event(cast, {assign_delivery, _PackageId, FromZone}, StateName, Data) whe
     end,
     {keep_state, Data};
 
-%% מצב picking_up – שליח נוסע למסעדה לאיסוף
+%% >> הערה חדשה: שינוי הטיפול בסיום האיסוף כדי להתמודד עם מצב השהיה <<
 handle_event(info, pickup_complete, picking_up, Data) ->
     case maps:get(paused, Data) of
         true ->
-            erlang:send_after(1000, self(), pickup_complete), % נסה שוב מאוחר יותר
-            {keep_state, Data};
+            % אם מושהה, שומרים את האירוע לעיבוד מאוחר יותר
+            {keep_state, Data#{pending_event => pickup_complete}};
         false ->
             CourierId = maps:get(id, Data),
             PackageId = maps:get(package, Data),
@@ -212,12 +224,12 @@ handle_event(info, pickup_complete, picking_up, Data) ->
             end
     end;
 
-%% מצב delivering – שליח בדרכו ללקוח
+%% >> הערה חדשה: שינוי הטיפול בסיום המשלוח כדי להתמודד עם מצב השהיה <<
 handle_event(info, delivery_complete, delivering, Data) ->
     case maps:get(paused, Data) of
         true ->
-            erlang:send_after(1000, self(), delivery_complete),
-            {keep_state, Data};
+            % אם מושהה, שומרים את האירוע לעיבוד מאוחר יותר
+            {keep_state, Data#{pending_event => delivery_complete}};
         false ->
             CourierId = maps:get(id, Data),
             PackageId = maps:get(package, Data),

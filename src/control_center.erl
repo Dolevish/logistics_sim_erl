@@ -680,14 +680,25 @@ resume_all_couriers(State) ->
         end
     end, lists:seq(1, NumCouriers)).
 
+%% >> הערה חדשה: שינוי פונקציות מאוחדות להשהיה והמשך <<
 %% פונקציות מאוחדות להשהיה והמשך
 pause_all_components(State) ->
     pause_all_order_generators(State),
-    pause_all_couriers(State).
+    pause_all_couriers(State),
+    %% הוספת קריאה להשהיית המעקב
+    case whereis(location_tracker) of
+        undefined -> ok;
+        _ -> location_tracker:pause()
+    end.
 
 resume_all_components(State) ->
     resume_all_order_generators(State),
-    resume_all_couriers(State).
+    resume_all_couriers(State),
+    %% הוספת קריאה להמשך המעקב
+    case whereis(location_tracker) of
+        undefined -> ok;
+        _ -> location_tracker:resume()
+    end.
 
 %% התחלת תהליך כיבוי מסודר
 initiate_graceful_shutdown(State) ->

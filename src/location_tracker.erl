@@ -10,6 +10,8 @@
 -export([start_link/0]).
 -export([start_tracking/4, stop_tracking/1, get_courier_status/1]).
 -export([update_all_positions/0]).
+%% >> הערה חדשה: הוספת פונקציות API חדשות להשהיה והמשך <<
+-export([pause/0, resume/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -37,7 +39,9 @@
 
 -record(state, {
     active_trackings = #{},  % מעקבים פעילים
-    update_timer             % טיימר לעדכון תקופתי
+    update_timer,            % טיימר לעדכון תקופתי
+    %% >> הערה חדשה: הוספת דגל למצב השהיה <<
+    paused = false
 }).
 
 %% קבועים
@@ -51,6 +55,13 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+%% >> הערה חדשה: פונקציות API חדשות להשהיה והמשך <<
+pause() ->
+    gen_server:cast(?MODULE, pause).
+
+resume() ->
+    gen_server:cast(?MODULE, resume).
 
 %% התחלת מעקב אחר שליח
 %% CourierId - מזהה השליח
@@ -140,6 +151,15 @@ handle_call({get_courier_status, CourierId}, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
+%% >> הערה חדשה: טיפול בפקודות החדשות להשהיה והמשך <<
+handle_cast(pause, State) ->
+    io:format("Location Tracker: Pausing updates.~n"),
+    {noreply, State#state{paused = true}};
+
+handle_cast(resume, State) ->
+    io:format("Location Tracker: Resuming updates.~n"),
+    {noreply, State#state{paused = false}};
+
 %% הפסקת מעקב
 handle_cast({stop_tracking, CourierId}, State) ->
     io:format("Location Tracker: Stopping tracking for courier ~p~n", [CourierId]),
@@ -154,12 +174,19 @@ handle_cast(update_all_positions, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% עדכון תקופתי של מיקומים
+%% >> הערה חדשה: שינוי לוגיקת עדכון המיקומים כדי שתתחשב במצב ההשהיה <<
 handle_info(update_positions, State) ->
-    %% עדכון כל המיקומים
-    NewState = update_all_courier_positions(State),
+    %% בדיקה אם המערכת מושהית
+    NewState = case State#state.paused of
+        true ->
+            %% אם כן, לא מעדכנים מיקומים
+            State;
+        false ->
+            %% אם לא, מעדכנים כרגיל
+            update_all_courier_positions(State)
+    end,
 
-    %% תזמון העדכון הבא
+    %% תזמון העדכון הבא בכל מקרה
     Timer = erlang:send_after(?UPDATE_INTERVAL_MS, self(), update_positions),
 
     {noreply, NewState#state{update_timer = Timer}};
