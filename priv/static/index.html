@@ -5,26 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Logistics Simulator - Dynamic Configuration</title>
     <link rel="stylesheet" href="style.css">
-</head>
-<body>
+</head><body>
     <div class="container">
-        <!-- Header -->
         <header>
             <h1>Logistics Simulator Dashboard</h1>
             <div class="controls">
-                <!-- Configuration Controls - visible when simulation is idle -->
                 <div id="configControls" class="config-controls">
                     <button id="startSimBtn" class="control-btn primary">Start Simulation</button>
                 </div>
-                
-                <!-- Runtime Controls - visible when simulation is running -->
+
                 <div id="runtimeControls" class="runtime-controls" style="display: none;">
-                    <button id="pauseBtn" class="control-btn">Pause</button>
-                    <button id="resumeBtn" class="control-btn" disabled>Resume</button>
+                    <button id="pauseSimBtn" class="control-btn">Pause Simulation</button>
+                    <button id="continueSimBtn" class="control-btn success" style="display: none;">Continue Simulation</button>
+                    <button id="pauseOrderGenBtn" class="control-btn">Pause Order Generator</button>
+                    <button id="continueOrderGenBtn" class="control-btn success" style="display: none;">Continue Order Generator</button>
                     <button id="resetBtn" class="control-btn danger">Reset Simulation</button>
                 </div>
-                
-                <!-- Connection Status -->
+
+                <div id="orderIntervalControl" class="update-interval-panel" style="display: none;">
+                    <div class="form-group">
+                        <label for="newOrderInterval">Order Generation Interval (seconds):</label>
+                        <input type="number" id="newOrderInterval" min="1" max="300" value="5">
+                    </div>
+                    <button id="updateOrderIntervalBtn" class="control-btn">Update Interval</button>
+                </div>
+
                 <div class="connection-status">
                     <span class="status-indicator" id="connectionStatus"></span>
                     <span id="connectionText">Disconnected</span>
@@ -32,13 +37,10 @@
             </div>
         </header>
 
-        <!-- Main Content -->
         <main>
-            <!-- Configuration Panel - visible when simulation is idle -->
             <section id="configPanel" class="config-panel">
                 <h2>Simulation Configuration</h2>
                 <form id="configForm" class="config-form">
-                    <!-- הוסר: קלט האזורים - כעת האזורים קבועים -->
                     <div class="zones-info">
                         <h3>Delivery Zones</h3>
                         <p>The simulation operates with 3 fixed zones:</p>
@@ -48,47 +50,45 @@
                             <li><strong>South Zone</strong> - Southern delivery area</li>
                         </ul>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="numCouriers">Number of Couriers:</label>
-                        <input type="number" id="numCouriers" name="numCouriers" 
+                        <input type="number" id="numCouriers" name="numCouriers"
                                min="1" max="50" value="4" required>
                         <small>Total number of couriers in the system (1-50)</small>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="orderInterval">Order Generation Interval (seconds):</label>
-                        <input type="number" id="orderInterval" name="orderInterval" 
+                        <input type="number" id="orderInterval" name="orderInterval"
                                min="1" max="300" value="5" required>
                         <small>Time between new orders (1-300 seconds)</small>
                     </div>
-                    
+
                     <div class="form-row">
                         <div class="form-group half">
                             <label for="minTravelTime">Min Travel Time (seconds):</label>
-                            <input type="number" id="minTravelTime" name="minTravelTime" 
+                            <input type="number" id="minTravelTime" name="minTravelTime"
                                    min="5" max="300" value="14" required>
                             <small>Minimum courier travel time</small>
                         </div>
-                        
+
                         <div class="form-group half">
                             <label for="maxTravelTime">Max Travel Time (seconds):</label>
-                            <input type="number" id="maxTravelTime" name="maxTravelTime" 
+                            <input type="number" id="maxTravelTime" name="maxTravelTime"
                                    min="10" max="600" value="40" required>
                             <small>Maximum courier travel time</small>
                         </div>
                     </div>
                 </form>
-                
+
                 <div class="config-info">
                     <h3>Ready to Start</h3>
                     <p>Configure your simulation parameters above and click "Start Simulation" to begin.</p>
                 </div>
             </section>
-
-            <!-- Runtime Panels - visible when simulation is running -->
+            
             <section id="runtimePanels" style="display: none;">
-                <!-- Left Panel - Orders/Packages -->
                 <section class="panel left-panel">
                     <h2>Orders Status</h2>
                     <div class="stats">
@@ -110,29 +110,24 @@
                         </div>
                     </div>
                     <div class="orders-list" id="ordersList">
-                        <!-- Orders will be populated dynamically -->
-                    </div>
+                        </div>
                 </section>
 
-                <!-- Right Panel - Couriers -->
                 <section class="panel right-panel">
                     <h2>Couriers Status</h2>
                     <div class="couriers-list" id="couriersList">
-                        <!-- Couriers will be populated dynamically -->
-                    </div>
+                        </div>
                 </section>
             </section>
         </main>
 
-        <!-- Footer -->
         <footer>
             <div id="zonesStatus" class="zones-status" style="display: none;">
                 <h3>Zone Status</h3>
                 <div class="zones-container" id="zonesContainer">
-                    <!-- Zones will be generated dynamically based on configuration -->
-                </div>
+                    </div>
             </div>
-            
+
             <div id="configFooter" class="config-footer">
                 <p>Logistics Simulator v2.0 - Configure and run your custom simulation</p>
             </div>

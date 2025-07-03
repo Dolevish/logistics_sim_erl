@@ -24,48 +24,48 @@ init(Req, State) ->
 %% אתחול ה-WebSocket handler
 websocket_init(State) ->
     io:format("WebSocket connection established~n"),
-    
+
     %% רישום לקבלת עדכונים מ-state collector
     logistics_state_collector:subscribe(self()),
-    
+
     %% שליחת מצב הסימולציה הנוכחי
     send_current_simulation_state(),
-    
+
     %% תזמון שליחת heartbeat כל 30 שניות
     erlang:send_after(30000, self(), heartbeat),
-    
+
     {ok, State}.
 
 %% טיפול בהודעות מהלקוח (דפדפן)
 websocket_handle({text, Msg}, State) ->
     io:format("Received from client: ~p~n", [Msg]),
-    
+
     %% פענוח ההודעה מ-JSON
     case jsx:decode(Msg, [return_maps]) of
         #{<<"type">> := <<"ping">>} ->
             %% תגובה ל-ping
             Response = jsx:encode(#{type => <<"pong">>, timestamp => erlang:system_time(second)}),
             {reply, {text, Response}, State};
-            
+
         #{<<"type">> := <<"pong">>} ->
             %% קיבלנו pong בתגובה ל-heartbeat שלנו - אין צורך לעשות כלום
             {ok, State};
-            
+
         #{<<"type">> := <<"request_simulation_state">>} ->
             %% הלקוח מבקש את מצב הסימולציה
             send_current_simulation_state(),
             {ok, State};
-            
+
         #{<<"type">> := <<"request_full_state">>} ->
             %% הלקוח מבקש את כל המצב
             send_full_state_to_client(),
             {ok, State};
-            
+
         #{<<"type">> := <<"command">>, <<"action">> := Action} = Cmd ->
             %% טיפול בפקודות מהלקוח
             handle_client_command(Action, Cmd),
             {ok, State};
-            
+
         _ ->
             io:format("Unknown message type: ~p~n", [Msg]),
             {ok, State}
@@ -83,7 +83,7 @@ websocket_info({state_update, UpdateType, Data}, State) ->
         data => Data,
         timestamp => erlang:system_time(second)
     },
-    
+
     {reply, {text, jsx:encode(Update)}, State};
 
 %% טיפול בעדכון מצב הסימולציה
@@ -94,7 +94,7 @@ websocket_info({simulation_state_update, SimState, Config}, State) ->
         config => Config,
         timestamp => erlang:system_time(second)
     },
-    
+
     {reply, {text, jsx:encode(Update)}, State};
 
 %% טיפול בהודעה פנימית לשליחת מצב מלא
@@ -153,16 +153,16 @@ send_full_state_to_client() ->
 %% טיפול בפקודות מהלקוח
 handle_client_command(<<"start_simulation">>, Cmd) ->
     io:format("Client requested start simulation~n"),
-    
+
     %% חילוץ ההגדרות מהפקודה
     Config = extract_config_from_command(Cmd),
-    
+
     %% שליחת הפקודה ל-control center
     case control_center:start_simulation(Config) of
         {ok, Message} ->
             send_command_response(<<"start_simulation">>, true, Message);
         {error, Reason} ->
-            send_command_response(<<"start_simulation">>, false, 
+            send_command_response(<<"start_simulation">>, false,
                                 list_to_binary(io_lib:format("~p", [Reason])))
     end;
 
@@ -172,19 +172,36 @@ handle_client_command(<<"stop_simulation">>, _Cmd) ->
         {ok, Message} ->
             send_command_response(<<"stop_simulation">>, true, Message);
         {error, Reason} ->
-            send_command_response(<<"stop_simulation">>, false, 
+            send_command_response(<<"stop_simulation">>, false,
                                 list_to_binary(io_lib:format("~p", [Reason])))
     end;
 
+% הוספת טיפול בפקודות החדשות
 handle_client_command(<<"pause_simulation">>, _Cmd) ->
     io:format("Client requested pause simulation~n"),
     control_center:pause_simulation(),
     send_command_response(<<"pause_simulation">>, true, <<"Simulation paused">>);
 
-handle_client_command(<<"resume_simulation">>, _Cmd) ->
-    io:format("Client requested resume simulation~n"),
-    control_center:resume_simulation(),
-    send_command_response(<<"resume_simulation">>, true, <<"Simulation resumed">>);
+handle_client_command(<<"continue_simulation">>, _Cmd) ->
+    io:format("Client requested continue simulation~n"),
+    control_center:continue_simulation(),
+    send_command_response(<<"continue_simulation">>, true, <<"Simulation continued">>);
+
+handle_client_command(<<"pause_order_generator">>, _Cmd) ->
+    io:format("Client requested pause order generator~n"),
+    control_center:pause_order_generator(),
+    send_command_response(<<"pause_order_generator">>, true, <<"Order generator paused">>);
+
+handle_client_command(<<"continue_order_generator">>, _Cmd) ->
+    io:format("Client requested continue order generator~n"),
+    control_center:continue_order_generator(),
+    send_command_response(<<"continue_order_generator">>, true, <<"Order generator continued">>);
+
+handle_client_command(<<"update_order_interval">>, Cmd) ->
+    io:format("Client requested update order interval~n"),
+    Interval = maps:get(<<"interval">>, Cmd),
+    control_center:update_order_interval(Interval),
+    send_command_response(<<"update_order_interval">>, true, <<"Order interval updated">>);
 
 handle_client_command(<<"emergency_stop">>, _Cmd) ->
     io:format("Client requested emergency stop~n"),
@@ -194,6 +211,7 @@ handle_client_command(<<"emergency_stop">>, _Cmd) ->
 handle_client_command(Action, _Cmd) ->
     io:format("Unknown client action: ~p~n", [Action]),
     send_command_response(Action, false, <<"Unknown command">>).
+
 
 %% חילוץ הגדרות מפקודת הלקוח
 %% כעת תמיד משתמשים באזורים הקבועים
@@ -206,32 +224,32 @@ extract_config_from_command(Cmd) ->
         min_travel_time => 10000,
         max_travel_time => 60000
     },
-    
+
     %% חילוץ ערכים מהפקודה - ללא zones כי הם קבועים
     NumCouriers = case maps:get(<<"num_couriers">>, Cmd, undefined) of
         undefined -> maps:get(num_couriers, DefaultConfig);
         N when is_integer(N) -> N;
         _ -> maps:get(num_couriers, DefaultConfig)
     end,
-    
+
     OrderInterval = case maps:get(<<"order_interval">>, Cmd, undefined) of
         undefined -> maps:get(order_interval, DefaultConfig);
         I when is_integer(I) -> I;
         _ -> maps:get(order_interval, DefaultConfig)
     end,
-    
+
     MinTravelTime = case maps:get(<<"min_travel_time">>, Cmd, undefined) of
         undefined -> maps:get(min_travel_time, DefaultConfig);
         T when is_integer(T) -> T;
         _ -> maps:get(min_travel_time, DefaultConfig)
     end,
-    
+
     MaxTravelTime = case maps:get(<<"max_travel_time">>, Cmd, undefined) of
         undefined -> maps:get(max_travel_time, DefaultConfig);
         T2 when is_integer(T2) -> T2;
         _ -> maps:get(max_travel_time, DefaultConfig)
     end,
-    
+
     %% החזרת המפה המעודכנת - תמיד עם האזורים הקבועים
     #{
         zones => ?FIXED_ZONES,
@@ -254,11 +272,11 @@ send_command_response(Command, Success, Message) ->
         end,
         timestamp => erlang:system_time(second)
     },
-    
+
     %% שליחה לכל המנויים דרך State Collector
     case whereis(logistics_state_collector) of
         undefined -> ok;
-        _ -> 
+        _ ->
             %% שליחת התגובה דרך State Collector שישדר לכל המנויים
             logistics_state_collector:broadcast_message(jsx:encode(Response))
     end.

@@ -29,6 +29,7 @@ header {
     justify-content: space-between;
     align-items: center;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    flex-wrap: wrap; /* הוספת גלישה לשורה חדשה במידת הצורך */
 }
 
 header h1 {
@@ -40,6 +41,7 @@ header h1 {
     display: flex;
     align-items: center;
     gap: 1rem;
+    flex-wrap: wrap; /* הוספת גלישה לשורה חדשה במידת הצורך */
 }
 
 .config-controls, .runtime-controls {
@@ -79,6 +81,16 @@ header h1 {
 .control-btn.primary:hover:not(:disabled) {
     background-color: #229954;
 }
+
+/* הוספת עיצוב לכפתורים ירוקים */
+.control-btn.success {
+    background-color: #2ecc71;
+}
+
+.control-btn.success:hover:not(:disabled) {
+    background-color: #27ae60;
+}
+
 
 .control-btn.danger {
     background-color: #e74c3c;
@@ -239,6 +251,21 @@ header h1 {
     color: #7f8c8d;
 }
 
+/* עדכון עיצוב לפאנל עדכון האינטרוול */
+.update-interval-panel {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-left: 1rem; /* הוספת מרווח משמאל */
+    border-left: 2px solid #34495e; /* קו הפרדה */
+    padding-left: 1rem; /* מרווח פנימי */
+}
+/* צבע לבן לכותרת של שדה העדכון */
+.update-interval-panel .form-group label {
+    color: white;
+}
+
+
 /* Main Content */
 main {
     flex: 1;
@@ -248,6 +275,7 @@ main {
     max-width: 1600px;
     margin: 0 auto;
     width: 100%;
+    flex-direction: column; /* סידור הפאנלים אחד מתחת לשני */
 }
 
 #runtimePanels {
@@ -584,15 +612,15 @@ footer {
 
 /* Animations */
 @keyframes pulse {
-    0% { 
+    0% {
         transform: scale(1);
         opacity: 1;
     }
-    50% { 
+    50% {
         transform: scale(1.2);
         opacity: 0.7;
     }
-    100% { 
+    100% {
         transform: scale(1);
         opacity: 1;
     }
@@ -651,26 +679,22 @@ footer {
 
 /* Responsive Design */
 @media (max-width: 1200px) {
-    main {
-        flex-direction: column;
-    }
-    
     #runtimePanels {
         flex-direction: column;
     }
-    
+
     .left-panel, .right-panel {
         max-width: 100%;
     }
-    
+
     .stats {
         grid-template-columns: repeat(2, 1fr);
     }
-    
+
     .couriers-list {
         grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
     }
-    
+
     .zones-container {
         grid-template-columns: 1fr; /* במסכים קטנים - עמודה אחת */
     }
@@ -681,32 +705,32 @@ footer {
         flex-direction: column;
         gap: 1rem;
     }
-    
+
     .controls {
         flex-wrap: wrap;
         justify-content: center;
     }
-    
+
     main {
         padding: 1rem;
     }
-    
+
     .zones-container {
         grid-template-columns: 1fr;
     }
-    
+
     .courier-item {
         min-width: 100%;
     }
-    
+
     .stats {
         grid-template-columns: 1fr;
     }
-    
+
     .form-row {
         flex-direction: column;
     }
-    
+
     .config-panel {
         margin: 1rem;
         padding: 1rem;

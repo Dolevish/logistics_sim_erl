@@ -9,6 +9,8 @@
 
 %% ממשק API
 -export([start_link/1]).
+% הוספת פונקציות להשהיה והמשך
+-export([pause/1, resume/1]).
 
 %% Callbacks - שינוי ל-handle_event mode
 -export([callback_mode/0, init/1, handle_event/4, terminate/3, code_change/4]).
@@ -22,6 +24,13 @@
 start_link(CourierId) ->
     gen_statem:start_link({local, list_to_atom("courier_" ++ CourierId)}, ?MODULE, [CourierId], []).
 
+% הוספת פונקציות API להשהיה והמשך
+pause(CourierId) ->
+    gen_statem:cast(list_to_atom("courier_" ++ CourierId), pause).
+
+resume(CourierId) ->
+    gen_statem:cast(list_to_atom("courier_" ++ CourierId), resume).
+
 %% שינוי ל-handle_event mode
 callback_mode() -> handle_event_function.
 
@@ -32,36 +41,52 @@ init([CourierId]) ->
     io:format("Courier ~p starting idle, waiting for delivery assignments...~n", [CourierId]),
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
-    
+
     %% דיווח למערכת הניטור על אתחול השליח - עם דיליי קטן
     erlang:send_after(100, self(), {report_initial_state}),
 
     {ok, idle, #{
-        id => CourierId, 
+        id => CourierId,
         zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
-        delivered_packages => [], 
-        total_delivered => 0
+        delivered_packages => [],
+        total_delivered => 0,
+        paused => false % הוספת משתנה למצב השהיה
     }}.
 
 %% -----------------------------------------------------------
 %% handle_event - מטפל בכל האירועים במצב אחיד
 %% -----------------------------------------------------------
 
+% טיפול בהשהיה
+handle_event(cast, pause, StateName, Data) ->
+    io:format("Courier ~p paused in state ~p~n", [maps:get(id, Data), StateName]),
+    {keep_state, Data#{paused => true}};
+
+% טיפול בהמשך
+handle_event(cast, resume, StateName, Data) ->
+    io:format("Courier ~p resumed in state ~p~n", [maps:get(id, Data), StateName]),
+    {keep_state, Data#{paused => false}};
+
+
 %% מצב idle – שליח ממתין לקבלת משלוח חדש
 handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
-    CourierId = maps:get(id, Data),
-    io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [CourierId, PackageId]),
-    %% עדכון סטטוס חבילה
-    package:update_status(PackageId, picking_up),
-    %% זמן נסיעה למסעדה רנדומלי לפי ההגדרות
-    PickupMs = get_dynamic_travel_time(),
-    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
+    case maps:get(paused, Data) of
+        true -> {keep_state, Data};
+        false ->
+            CourierId = maps:get(id, Data),
+            io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [CourierId, PackageId]),
+            %% עדכון סטטוס חבילה
+            package:update_status(PackageId, picking_up),
+            %% זמן נסיעה למסעדה רנדומלי לפי ההגדרות
+            PickupMs = get_dynamic_travel_time(),
+            io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
 
-    %% דיווח למערכת הניטור על שינוי המצב
-    report_state_change(CourierId, picking_up, #{package => PackageId, eta => PickupMs}),
+            %% דיווח למערכת הניטור על שינוי המצב
+            report_state_change(CourierId, picking_up, #{package => PackageId, eta => PickupMs}),
 
-    erlang:send_after(PickupMs, self(), pickup_complete),
-    {next_state, picking_up, Data#{package => PackageId}};
+            erlang:send_after(PickupMs, self(), pickup_complete),
+            {next_state, picking_up, Data#{package => PackageId}}
+    end;
 
 %% תיקון: מטפל גם במקרה שיש אזור מקור
 handle_event(cast, {assign_delivery, PackageId, FromZone}, idle, Data) ->
@@ -89,51 +114,63 @@ handle_event(cast, {assign_delivery, PackageId, FromZone}, StateName, Data) when
 
 %% מצב picking_up – שליח נוסע למסעדה לאיסוף
 handle_event(info, pickup_complete, picking_up, Data) ->
-    CourierId = maps:get(id, Data),
-    PackageId = maps:get(package, Data),
-    io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
-    package:update_status(PackageId, in_transit),
-    %% זמן נסיעה ללקוח רנדומלי לפי ההגדרות
-    DeliveryMs = get_dynamic_travel_time(),
-    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
+    case maps:get(paused, Data) of
+        true ->
+            erlang:send_after(1000, self(), pickup_complete), % נסה שוב מאוחר יותר
+            {keep_state, Data};
+        false ->
+            CourierId = maps:get(id, Data),
+            PackageId = maps:get(package, Data),
+            io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
+            package:update_status(PackageId, in_transit),
+            %% זמן נסיעה ללקוח רנדומלי לפי ההגדרות
+            DeliveryMs = get_dynamic_travel_time(),
+            io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
 
-    %% דיווח למערכת הניטור
-    Zone = maps:get(zone, Data, "unknown"),
-    report_state_change(CourierId, delivering, #{package => PackageId, zone => Zone, eta => DeliveryMs}),
+            %% דיווח למערכת הניטור
+            Zone = maps:get(zone, Data, "unknown"),
+            report_state_change(CourierId, delivering, #{package => PackageId, zone => Zone, eta => DeliveryMs}),
 
-    erlang:send_after(DeliveryMs, self(), delivery_complete),
-    {next_state, delivering, Data};
+            erlang:send_after(DeliveryMs, self(), delivery_complete),
+            {next_state, delivering, Data}
+    end;
 
 %% מצב delivering – שליח בדרכו ללקוח
 handle_event(info, delivery_complete, delivering, Data) ->
-    CourierId = maps:get(id, Data),
-    PackageId = maps:get(package, Data),
-    io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [CourierId, PackageId]),
-    package:update_status(PackageId, delivered),
+    case maps:get(paused, Data) of
+        true ->
+            erlang:send_after(1000, self(), delivery_complete), % נסה שוב מאוחר יותר
+            {keep_state, Data};
+        false ->
+            CourierId = maps:get(id, Data),
+            PackageId = maps:get(package, Data),
+            io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [CourierId, PackageId]),
+            package:update_status(PackageId, delivered),
 
-    %% עדכון רשימת החבילות שנמסרו
-    DeliveredPackages = maps:get(delivered_packages, Data),
-    TotalDelivered = maps:get(total_delivered, Data),
-    NewDeliveredPackages = [PackageId | DeliveredPackages],
-    NewTotalDelivered = TotalDelivered + 1,
+            %% עדכון רשימת החבילות שנמסרו
+            DeliveredPackages = maps:get(delivered_packages, Data),
+            TotalDelivered = maps:get(total_delivered, Data),
+            NewDeliveredPackages = [PackageId | DeliveredPackages],
+            NewTotalDelivered = TotalDelivered + 1,
 
-    %% דיווח למערכת הניטור על סיום המשלוח
-    report_state_change(CourierId, idle, #{
-        delivered_packages => NewDeliveredPackages,
-        total_delivered => NewTotalDelivered
-    }),
+            %% דיווח למערכת הניטור על סיום המשלוח
+            report_state_change(CourierId, idle, #{
+                delivered_packages => NewDeliveredPackages,
+                total_delivered => NewTotalDelivered
+            }),
 
-    %% החזר את השליח לתור המרכזי
-    courier_pool:return_courier(CourierId),
+            %% החזר את השליח לתור המרכזי
+            courier_pool:return_courier(CourierId),
 
-    %% עדכון הנתונים המקומיים
-    NewData = maps:remove(package, Data#{
-        delivered_packages => NewDeliveredPackages,
-        total_delivered => NewTotalDelivered,
-        zone => null
-    }),
+            %% עדכון הנתונים המקומיים
+            NewData = maps:remove(package, Data#{
+                delivered_packages => NewDeliveredPackages,
+                total_delivered => NewTotalDelivered,
+                zone => null
+            }),
 
-    {next_state, idle, NewData};
+            {next_state, idle, NewData}
+    end;
 
 %% מצב moving_zone – שמור לעתיד, מעבר אזורים
 handle_event(EventType, Event, moving_zone, Data) ->

@@ -25,21 +25,30 @@ const elements = {
     // Connection
     connectionStatus: document.getElementById('connectionStatus'),
     connectionText: document.getElementById('connectionText'),
-    
+
     // Control buttons
     startSimBtn: document.getElementById('startSimBtn'),
-    pauseBtn: document.getElementById('pauseBtn'),
-    resumeBtn: document.getElementById('resumeBtn'),
     resetBtn: document.getElementById('resetBtn'),
-    
+
+    // לחצנים חדשים
+    pauseSimBtn: document.getElementById('pauseSimBtn'),
+    continueSimBtn: document.getElementById('continueSimBtn'),
+    pauseOrderGenBtn: document.getElementById('pauseOrderGenBtn'),
+    continueOrderGenBtn: document.getElementById('continueOrderGenBtn'),
+
+    // שדה חדש לעדכון קצב הזמנות
+    orderIntervalControl: document.getElementById('orderIntervalControl'),
+    newOrderInterval: document.getElementById('newOrderInterval'),
+    updateOrderIntervalBtn: document.getElementById('updateOrderIntervalBtn'),
+
     // Control panels
     configControls: document.getElementById('configControls'),
     runtimeControls: document.getElementById('runtimeControls'),
-    
+
     // Main panels
     configPanel: document.getElementById('configPanel'),
     runtimePanels: document.getElementById('runtimePanels'),
-    
+
     // Form elements
     configForm: document.getElementById('configForm'),
     // הוסר: zonesInput - כעת האזורים קבועים
@@ -47,7 +56,7 @@ const elements = {
     orderIntervalInput: document.getElementById('orderInterval'),
     minTravelTimeInput: document.getElementById('minTravelTime'),
     maxTravelTimeInput: document.getElementById('maxTravelTime'),
-    
+
     // Runtime elements
     ordersList: document.getElementById('ordersList'),
     couriersList: document.getElementById('couriersList'),
@@ -55,7 +64,7 @@ const elements = {
     pendingOrders: document.getElementById('pendingOrders'),
     inTransitOrders: document.getElementById('inTransitOrders'),
     deliveredOrders: document.getElementById('deliveredOrders'),
-    
+
     // Footer
     zonesStatus: document.getElementById('zonesStatus'),
     configFooter: document.getElementById('configFooter'),
@@ -68,7 +77,7 @@ function init() {
     connectWebSocket();
     setupEventListeners();
     validateFormInputs();
-    
+
     // Initial UI state
     updateUIForSimulationState('idle');
 }
@@ -77,15 +86,19 @@ function init() {
 function setupEventListeners() {
     // Configuration controls
     elements.startSimBtn.addEventListener('click', startSimulation);
-    
+
     // Runtime controls
-    elements.pauseBtn.addEventListener('click', pauseSimulation);
-    elements.resumeBtn.addEventListener('click', resumeSimulation);
     elements.resetBtn.addEventListener('click', resetSimulation);
-    
+    // האזנה ללחיצות על הכפתורים החדשים
+    elements.pauseSimBtn.addEventListener('click', pauseSimulation);
+    elements.continueSimBtn.addEventListener('click', continueSimulation);
+    elements.pauseOrderGenBtn.addEventListener('click', pauseOrderGenerator);
+    elements.continueOrderGenBtn.addEventListener('click', continueOrderGenerator);
+    elements.updateOrderIntervalBtn.addEventListener('click', updateOrderInterval);
+
     // Form validation
     elements.configForm.addEventListener('input', validateFormInputs);
-    
+
     // Travel time validation
     elements.minTravelTimeInput.addEventListener('change', () => {
         const min = parseInt(elements.minTravelTimeInput.value);
@@ -94,7 +107,7 @@ function setupEventListeners() {
             elements.maxTravelTimeInput.value = min + 10;
         }
     });
-    
+
     elements.maxTravelTimeInput.addEventListener('change', () => {
         const min = parseInt(elements.minTravelTimeInput.value);
         const max = parseInt(elements.maxTravelTimeInput.value);
@@ -111,11 +124,11 @@ function validateFormInputs() {
     const orderInterval = parseInt(elements.orderIntervalInput.value);
     const minTravel = parseInt(elements.minTravelTimeInput.value);
     const maxTravel = parseInt(elements.maxTravelTimeInput.value);
-    
+
     const isValid = numCouriers > 0 && numCouriers <= 50 &&
                    orderInterval > 0 && orderInterval <= 300 &&
                    minTravel > 0 && maxTravel > minTravel;
-    
+
     elements.startSimBtn.disabled = !isValid;
 }
 
@@ -130,45 +143,72 @@ function startSimulation() {
         min_travel_time: parseInt(elements.minTravelTimeInput.value) * 1000, // Convert to ms
         max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000 // Convert to ms
     };
-    
+
     // Store configuration
     appState.configuration = config;
-    
+
     // Generate zone panels immediately with the configuration
     generateZonePanels();
-    
+
     // Send start command
     sendCommand('start_simulation', config);
-    
+
     // Update UI immediately to show loading state
     elements.startSimBtn.disabled = true;
     elements.startSimBtn.textContent = 'Starting...';
 }
 
-// Pause simulation
+// פונקציות חדשות לטיפול בכפתורים
 function pauseSimulation() {
     sendCommand('pause_simulation');
     appState.isPaused = true;
     updateUIForSimulationState('paused');
+    elements.orderIntervalControl.style.display = 'flex'; // שינוי ל-flex
+    // השבתת כפתור השהיית יצירת הזמנות
+    elements.pauseOrderGenBtn.disabled = true;
+    elements.continueOrderGenBtn.disabled = true;
 }
 
-// Resume simulation
-function resumeSimulation() {
-    sendCommand('resume_simulation');
+function continueSimulation() {
+    sendCommand('continue_simulation');
     appState.isPaused = false;
     updateUIForSimulationState('running');
+    elements.orderIntervalControl.style.display = 'none';
+     // הפעלת כפתור השהיית יצירת הזמנות
+    elements.pauseOrderGenBtn.disabled = false;
+    elements.continueOrderGenBtn.disabled = false;
+}
+
+function pauseOrderGenerator() {
+    sendCommand('pause_order_generator');
+    updateUIForOrderGeneratorState(true);
+    elements.orderIntervalControl.style.display = 'flex'; // שינוי ל-flex
+}
+
+function continueOrderGenerator() {
+    sendCommand('continue_order_generator');
+    updateUIForOrderGeneratorState(false);
+    elements.orderIntervalControl.style.display = 'none';
+}
+
+function updateOrderInterval() {
+    const newInterval = parseInt(elements.newOrderInterval.value);
+    if (newInterval > 0) {
+        // המרה לשניות לפני השליחה
+        sendCommand('update_order_interval', { interval: newInterval * 1000 });
+    }
 }
 
 // Reset simulation
 function resetSimulation() {
     if (confirm('Are you sure you want to reset the simulation? All current data will be lost.')) {
         sendCommand('stop_simulation');
-        
+
         // Clear local state
         appState.couriers = {};
         appState.packages = {};
         appState.zones = {};
-        
+
         // Clear UI
         elements.ordersList.innerHTML = '';
         elements.couriersList.innerHTML = '';
@@ -180,7 +220,7 @@ function resetSimulation() {
 // Update UI based on simulation state
 function updateUIForSimulationState(state) {
     appState.simulationState = state;
-    
+
     switch(state) {
         case 'idle':
             // Show configuration panel
@@ -190,12 +230,13 @@ function updateUIForSimulationState(state) {
             elements.runtimeControls.style.display = 'none';
             elements.zonesStatus.style.display = 'none';
             elements.configFooter.style.display = 'block';
-            
+            elements.orderIntervalControl.style.display = 'none';
+
             // Reset start button
             elements.startSimBtn.disabled = false;
             elements.startSimBtn.textContent = 'Start Simulation';
             break;
-            
+
         case 'running':
             // Show runtime panels
             elements.configPanel.style.display = 'none';
@@ -204,37 +245,53 @@ function updateUIForSimulationState(state) {
             elements.runtimeControls.style.display = 'flex';
             elements.zonesStatus.style.display = 'block';
             elements.configFooter.style.display = 'none';
-            
-            // Update button states
-            elements.pauseBtn.disabled = false;
-            elements.resumeBtn.disabled = true;
-            
+
+            // עדכון מצב לחצנים
+            elements.pauseSimBtn.style.display = 'inline-block';
+            elements.continueSimBtn.style.display = 'none';
+            elements.pauseOrderGenBtn.style.display = 'inline-block';
+            elements.continueOrderGenBtn.style.display = 'none';
+            elements.pauseOrderGenBtn.disabled = false;
+
             // Always regenerate zone panels when running
             generateZonePanels();
             break;
-            
+
         case 'paused':
-            // Update button states
-            elements.pauseBtn.disabled = true;
-            elements.resumeBtn.disabled = false;
+            // עדכון מצב לחצנים
+            elements.pauseSimBtn.style.display = 'none';
+            elements.continueSimBtn.style.display = 'inline-block';
+            elements.pauseOrderGenBtn.disabled = true; // השבתה
             break;
     }
 }
+
+// פונקציה חדשה לעדכון ממשק המשתמש עבור מחולל ההזמנות
+function updateUIForOrderGeneratorState(isPaused) {
+    if (isPaused) {
+        elements.pauseOrderGenBtn.style.display = 'none';
+        elements.continueOrderGenBtn.style.display = 'inline-block';
+    } else {
+        elements.pauseOrderGenBtn.style.display = 'inline-block';
+        elements.continueOrderGenBtn.style.display = 'none';
+    }
+}
+
 
 // Generate zone status panels based on configuration
 function generateZonePanels() {
     console.log('Generating zone panels...');
     elements.zonesContainer.innerHTML = '';
-    
+
     // תמיד משתמשים באזורים הקבועים
     const zones = FIXED_ZONES;
     console.log('Zones to generate:', zones);
-    
+
     zones.forEach(zone => {
         const zoneDiv = document.createElement('div');
         zoneDiv.className = 'zone-item';
         zoneDiv.setAttribute('data-zone', zone);
-        
+
         zoneDiv.innerHTML = `
             <h4>${zone.charAt(0).toUpperCase() + zone.slice(1)} Zone</h4>
             <div class="zone-stats">
@@ -244,11 +301,11 @@ function generateZonePanels() {
                 <span>Delivered: <span class="zone-delivered">0</span></span>
             </div>
         `;
-        
+
         elements.zonesContainer.appendChild(zoneDiv);
         console.log('Created zone panel for:', zone);
     });
-    
+
     console.log('Zone panels created:', elements.zonesContainer.children.length);
 }
 
@@ -261,17 +318,17 @@ function connectWebSocket() {
 
     const wsUrl = `ws://${window.location.host}/websocket`;
     console.log(`Connecting to WebSocket at ${wsUrl}... (attempt ${reconnectAttempts + 1})`);
-    
+
     try {
         ws = new WebSocket(wsUrl);
-        
+
         const connectionTimeout = setTimeout(() => {
             console.log('WebSocket connection timeout');
             if (ws.readyState !== WebSocket.OPEN) {
                 ws.close();
             }
         }, 10000);
-        
+
         ws.onopen = () => {
             clearTimeout(connectionTimeout);
             console.log('WebSocket connected successfully');
@@ -279,7 +336,7 @@ function connectWebSocket() {
             reconnectAttempts = 0;
             updateConnectionStatus(true);
             clearInterval(reconnectInterval);
-            
+
             // Request current simulation state
             setTimeout(() => {
                 ws.send(JSON.stringify({
@@ -287,7 +344,7 @@ function connectWebSocket() {
                 }));
             }, 100);
         };
-        
+
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
@@ -296,13 +353,13 @@ function connectWebSocket() {
                 console.error('Error parsing WebSocket message:', error);
             }
         };
-        
+
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             isConnected = false;
             updateConnectionStatus(false);
         };
-        
+
         ws.onclose = (event) => {
             clearTimeout(connectionTimeout);
             console.log(`WebSocket disconnected (code: ${event.code})`);
@@ -310,7 +367,7 @@ function connectWebSocket() {
             updateConnectionStatus(false);
             attemptReconnect();
         };
-        
+
     } catch (error) {
         console.error('Failed to create WebSocket:', error);
         isConnected = false;
@@ -323,7 +380,7 @@ function attemptReconnect() {
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         const backoffDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
         console.log(`Attempting to reconnect in ${backoffDelay}ms...`);
-        
+
         clearInterval(reconnectInterval);
         reconnectInterval = setTimeout(() => {
             reconnectAttempts++;
@@ -335,31 +392,31 @@ function attemptReconnect() {
 // Handle incoming WebSocket messages
 function handleWebSocketMessage(data) {
     console.log('Received:', data.type, data);
-    
+
     switch (data.type) {
         case 'simulation_state':
             handleSimulationStateUpdate(data.state, data.config);
             break;
-            
+
         case 'state_update':
             handleStateUpdate(data.update_type, data.data);
             break;
-            
+
         case 'command_response':
             handleCommandResponse(data.command, data.success, data.message);
             break;
-            
+
         case 'heartbeat':
             // תגובה ל-heartbeat מהשרת
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({type: 'pong'}));
             }
             break;
-            
+
         case 'pong':
             // תגובה מהשרת ל-ping שלנו - אין צורך לעשות כלום
             break;
-            
+
         default:
             console.log('Unknown message type:', data.type);
     }
@@ -369,15 +426,15 @@ function handleWebSocketMessage(data) {
 function handleSimulationStateUpdate(state, config) {
     console.log('Simulation state:', state);
     console.log('Simulation config:', config);
-    
+
     if (config) {
         // תמיד נשתמש באזורים הקבועים
         config.zones = FIXED_ZONES;
         appState.configuration = config;
     }
-    
+
     updateUIForSimulationState(state);
-    
+
     // If simulation just started, request full state
     if (state === 'running') {
         setTimeout(() => {
@@ -389,7 +446,7 @@ function handleSimulationStateUpdate(state, config) {
 // Handle command responses
 function handleCommandResponse(command, success, message) {
     console.log(`Command ${command}: ${success ? 'Success' : 'Failed'} - ${message}`);
-    
+
     if (command === 'start_simulation' && !success) {
         // Reset UI if start failed
         updateUIForSimulationState('idle');
@@ -401,7 +458,7 @@ function handleCommandResponse(command, success, message) {
 function handleStateUpdate(updateType, data) {
     try {
         console.log('Handling state update:', updateType, data);
-        
+
         switch (updateType) {
             case 'couriers_init':
                 if (Array.isArray(data)) {
@@ -411,7 +468,7 @@ function handleStateUpdate(updateType, data) {
                     renderCouriers();
                 }
                 break;
-                
+
             case 'packages_init':
                 if (Array.isArray(data)) {
                     data.forEach(pkg => {
@@ -421,7 +478,7 @@ function handleStateUpdate(updateType, data) {
                     updateStats();
                 }
                 break;
-                
+
             case 'courier_update':
                 if (data && data.id) {
                     const existingCourier = appState.couriers[data.id] || {};
@@ -429,14 +486,14 @@ function handleStateUpdate(updateType, data) {
                         ...existingCourier,
                         ...data,
                         delivered_packages: data.delivered_packages || existingCourier.delivered_packages || [],
-                        total_delivered: data.total_delivered !== undefined ? 
-                            data.total_delivered : 
+                        total_delivered: data.total_delivered !== undefined ?
+                            data.total_delivered :
                             (existingCourier.total_delivered || 0)
                     };
                     updateCourierDisplay(appState.couriers[data.id]);
                 }
                 break;
-                
+
             case 'package_update':
                 if (data && data.id) {
                     appState.packages[data.id] = data;
@@ -444,54 +501,54 @@ function handleStateUpdate(updateType, data) {
                     updateStats();
                 }
                 break;
-                
+
             case 'zone_update':
                 if (data && data.zone) {
                     // Make sure zone panels exist
                     if (elements.zonesContainer.children.length === 0) {
                         console.log('Zone panels missing, generating them now...');
-                        generateZonePanels();
+                        generateZonePAnels();
                     }
-                    
+
                     appState.zones[data.zone] = data;
                     updateZoneDisplay(data);
                 }
                 break;
-                
+
             case 'full_state':
                 console.log('Received full state:', data);
-                
+
                 // Clear existing data
                 appState.couriers = {};
                 appState.packages = {};
                 appState.zones = {};
-                
+
                 if (data.couriers && Array.isArray(data.couriers)) {
                     data.couriers.forEach(courier => {
                         appState.couriers[courier.id] = courier;
                     });
                     renderCouriers();
                 }
-                
+
                 if (data.packages && Array.isArray(data.packages)) {
                     data.packages.forEach(pkg => {
                         appState.packages[pkg.id] = pkg;
                     });
                     renderPackages();
                 }
-                
+
                 if (data.zones && Array.isArray(data.zones)) {
                     // Make sure we have zone panels created
                     if (elements.zonesContainer.children.length === 0) {
                         generateZonePanels();
                     }
-                    
+
                     data.zones.forEach(zone => {
                         appState.zones[zone.zone] = zone;
                         updateZoneDisplay(zone);
                     });
                 }
-                
+
                 updateStats();
                 break;
         }
@@ -504,10 +561,10 @@ function handleStateUpdate(updateType, data) {
 function sendCommand(action, data = {}) {
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
-            const message = action === 'request_full_state' ? 
+            const message = action === 'request_full_state' ?
                 { type: 'request_full_state' } :
                 { type: 'command', action: action, ...data };
-                
+
             console.log('Sending command:', message);
             ws.send(JSON.stringify(message));
         } catch (error) {
@@ -555,9 +612,9 @@ function createCourierElement(courier) {
     const div = document.createElement('div');
     div.className = `courier-item ${courier.status || 'unknown'}`;
     div.id = `courier-${courier.id}`;
-    
+
     const statusText = (courier.status || 'unknown').replace('_', ' ').toUpperCase();
-    
+
     let detailsHTML = '';
     if (courier.current_package) {
         detailsHTML = `
@@ -568,16 +625,16 @@ function createCourierElement(courier) {
             </div>
         `;
     }
-    
+
     let deliveredHTML = '';
     const deliveredPackages = courier.delivered_packages || [];
     const totalDelivered = courier.total_delivered || deliveredPackages.length || 0;
-    
+
     if (deliveredPackages.length > 0) {
         const recentDeliveries = deliveredPackages.slice(-3);
         deliveredHTML = `<div class="delivered-list">Recent: ${recentDeliveries.join(', ')}</div>`;
     }
-    
+
     div.innerHTML = `
         <div class="courier-header">
             <span class="courier-name">${(courier.id || 'unknown').toUpperCase()}</span>
@@ -589,7 +646,7 @@ function createCourierElement(courier) {
         </div>
         ${deliveredHTML}
     `;
-    
+
     return div;
 }
 
@@ -614,10 +671,10 @@ function updateCourierDisplay(courier) {
 // Render all packages
 function renderPackages() {
     elements.ordersList.innerHTML = '';
-    
+
     const sortedPackages = Object.values(appState.packages)
         .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-    
+
     sortedPackages.forEach(pkg => {
         try {
             const packageElement = createPackageElement(pkg);
@@ -633,9 +690,9 @@ function createPackageElement(pkg) {
     const div = document.createElement('div');
     div.className = `order-item ${pkg.status || 'unknown'}`;
     div.id = `package-${pkg.id}`;
-    
+
     const statusText = (pkg.status || 'unknown').replace('_', ' ').toUpperCase();
-    
+
     let detailsHTML = '<div class="order-details">';
     if (pkg.zone) {
         detailsHTML += `Zone: ${pkg.zone}<br>`;
@@ -651,7 +708,7 @@ function createPackageElement(pkg) {
         detailsHTML += `Status: Waiting for courier assignment`;
     }
     detailsHTML += '</div>';
-    
+
     div.innerHTML = `
         <div class="order-header">
             <span class="order-id">Order #${pkg.id || 'unknown'}</span>
@@ -659,7 +716,7 @@ function createPackageElement(pkg) {
         </div>
         ${detailsHTML}
     `;
-    
+
     return div;
 }
 
@@ -686,18 +743,18 @@ function updateZoneDisplay(zone) {
     console.log('Updating zone display:', zone);
     const zoneElement = document.querySelector(`[data-zone="${zone.zone}"]`);
     console.log('Zone element found:', zoneElement);
-    
+
     if (zoneElement) {
         const waitingEl = zoneElement.querySelector('.zone-waiting');
         const activeEl = zoneElement.querySelector('.zone-active');
         const deliveredEl = zoneElement.querySelector('.zone-delivered');
         const totalEl = zoneElement.querySelector('.zone-total');
-        
+
         if (waitingEl) waitingEl.textContent = zone.waiting_packages || 0;
         if (activeEl) activeEl.textContent = zone.active_deliveries || 0;
         if (deliveredEl) deliveredEl.textContent = zone.total_delivered || 0;
         if (totalEl) totalEl.textContent = zone.total_orders || 0;
-        
+
         console.log('Zone stats updated:', {
             zone: zone.zone,
             total: zone.total_orders || 0,
@@ -713,14 +770,14 @@ function updateZoneDisplay(zone) {
 // Update statistics
 function updateStats() {
     const packages = Object.values(appState.packages);
-    
+
     const stats = {
         total: packages.length,
         pending: packages.filter(p => p.status === 'ordered').length,
         inTransit: packages.filter(p => ['assigned', 'picking_up', 'in_transit', 'delivering'].includes(p.status)).length,
         delivered: packages.filter(p => p.status === 'delivered').length
     };
-    
+
     elements.totalOrders.textContent = stats.total;
     elements.pendingOrders.textContent = stats.pending;
     elements.inTransitOrders.textContent = stats.inTransit;
