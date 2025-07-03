@@ -1,6 +1,6 @@
 %% -----------------------------------------------------------
-%% מודול מחולל הזמנות רנדומלי (Random Order Generator)
-%% יוצר חבילה חדשה כל 5 שניות באזור רנדומלי
+%% מודול מחולל הזמנות רנדומלי משופר - תומך באזורים דינמיים
+%% יוצר חבילה חדשה כל X שניות באזור רנדומלי
 %% -----------------------------------------------------------
 -module(random_order_generator).
 -behaviour(gen_server).
@@ -19,22 +19,32 @@ init([]) ->
     io:format("Random Order Generator started!~n"),
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
-    %% רשימת האזורים
-    Zones = ["north", "center", "south"],
-    %% תזמון ישיר עם אינטרוול של 5 שניות
-    DefaultInterval = 5000, %% 5 שניות
+    
+    %% קריאת רשימת האזורים מההגדרות
+    Zones = get_zones_from_config(),
+    
+    %% קריאת interval מההגדרות
+    DefaultInterval = get_interval_from_config(),
+    
+    io:format("Random Order Generator: Using zones ~p with interval ~p ms~n", [Zones, DefaultInterval]),
+    
+    %% תזמון ישיר
     erlang:send_after(DefaultInterval, self(), create_random_order),
-    {ok, #{
+    
+    %% יצירת מפה ריקה למונים לכל אזור
+    ZoneCounters = lists:foldl(fun(Zone, Acc) ->
+        maps:put(list_to_atom(Zone ++ "_orders"), 0, Acc)
+    end, #{}, Zones),
+    
+    State = maps:merge(#{
         zones => Zones,
         next_id => 1, 
         active => true, 
         interval => DefaultInterval,
-        total_orders => 0,
-        %% מונה לכל אזור
-        north_orders => 0,
-        center_orders => 0,
-        south_orders => 0
-    }}.
+        total_orders => 0
+    }, ZoneCounters),
+    
+    {ok, State}.
 
 %% -----------------------------------------------------------
 %% יצירת הזמנה רנדומלית
@@ -73,11 +83,7 @@ handle_info(create_random_order, State) ->
             %% הדפסת סטטיסטיקות כל 10 הזמנות
             case (TotalOrders + 1) rem 10 of
                 0 ->
-                    io:format("=== Order Stats: Total: ~p, North: ~p, Center: ~p, South: ~p ===~n", 
-                             [maps:get(total_orders, NewState),
-                              maps:get(north_orders, NewState),
-                              maps:get(center_orders, NewState),
-                              maps:get(south_orders, NewState)]);
+                    print_stats(NewState);
                 _ -> ok
             end,
             
@@ -107,12 +113,17 @@ handle_call({set_interval, NewInterval}, _From, State) ->
     {reply, ok, State#{interval => NewInterval}};
 
 handle_call(get_stats, _From, State) ->
+    %% בניית מפת סטטיסטיקות דינמית
+    Zones = maps:get(zones, State),
+    ZoneStats = lists:foldl(fun(Zone, Acc) ->
+        ZoneKey = list_to_atom(Zone ++ "_orders"),
+        maps:put(Zone, maps:get(ZoneKey, State, 0), Acc)
+    end, #{}, Zones),
+    
     Stats = #{
         active => maps:get(active, State),
         total_orders => maps:get(total_orders, State),
-        north_orders => maps:get(north_orders, State),
-        center_orders => maps:get(center_orders, State),
-        south_orders => maps:get(south_orders, State),
+        zone_stats => ZoneStats,
         next_id => maps:get(next_id, State),
         interval => maps:get(interval, State)
     },
@@ -139,3 +150,43 @@ set_interval(IntervalMs) ->
 
 get_stats() ->
     gen_server:call(?MODULE, get_stats).
+
+%% -----------------------------------------------------------
+%% פונקציות עזר פרטיות
+%% -----------------------------------------------------------
+
+%% קריאת רשימת האזורים מההגדרות
+get_zones_from_config() ->
+    case ets:info(simulation_config) of
+        undefined -> 
+            ["north", "center", "south"];  % ברירת מחדל
+        _ ->
+            case ets:lookup(simulation_config, zones) of
+                [{zones, Zones}] -> Zones;
+                [] -> ["north", "center", "south"]  % ברירת מחדל
+            end
+    end.
+
+%% קריאת interval מההגדרות
+get_interval_from_config() ->
+    case ets:info(simulation_config) of
+        undefined -> 
+            5000;  % ברירת מחדל - 5 שניות
+        _ ->
+            case ets:lookup(simulation_config, order_interval) of
+                [{order_interval, Interval}] -> Interval;
+                [] -> 5000  % ברירת מחדל
+            end
+    end.
+
+%% הדפסת סטטיסטיקות
+print_stats(State) ->
+    Zones = maps:get(zones, State),
+    TotalOrders = maps:get(total_orders, State),
+    
+    io:format("=== Order Stats: Total: ~p ===~n", [TotalOrders]),
+    lists:foreach(fun(Zone) ->
+        ZoneKey = list_to_atom(Zone ++ "_orders"),
+        ZoneOrders = maps:get(ZoneKey, State, 0),
+        io:format("  ~s: ~p~n", [Zone, ZoneOrders])
+    end, Zones).

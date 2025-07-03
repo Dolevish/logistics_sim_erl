@@ -1,9 +1,7 @@
 %% -----------------------------------------------------------
-%% מודול שליח (Courier) - FSM
+%% מודול שליח (Courier) משופר - עם זמני נסיעה דינמיים
 %% כל תהליך שליח מייצג שליח אמיתי במערכת
-%% עם התקדמות אוטומטית בין המצבים (כולל דיליי רנדומלי)
-%% עדכון: שליחים זמינים לכל האזורים במערכת
-%% עדכון: הוספת דיווחים ל-State Collector לממשק הגרפי
+%% עם התקדמות אוטומטית בין המצבים וזמני נסיעה מותאמים אישית
 %% -----------------------------------------------------------
 
 -module(courier).
@@ -31,10 +29,17 @@ init([CourierId]) ->
     io:format("Courier ~p starting idle, waiting for delivery assignments...~n", [CourierId]),
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
-    %% רשימת כל האזורים במערכת
-    AllZones = ["north", "center", "south"],
-    %% השליח לא צריך להודיע שהוא זמין - הוא כבר בתור המרכזי
-
+    
+    %% קריאת רשימת האזורים מההגדרות
+    AllZones = case ets:info(simulation_config) of
+        undefined -> ["north", "center", "south"];  % ברירת מחדל
+        _ ->
+            case ets:lookup(simulation_config, zones) of
+                [{zones, Zones}] -> Zones;
+                [] -> ["north", "center", "south"]  % ברירת מחדל
+            end
+    end,
+    
     %% דיווח למערכת הניטור על אתחול השליח - עם דיליי קטן
     erlang:send_after(100, self(), {report_initial_state}),
 
@@ -50,8 +55,8 @@ handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
     io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [CourierId, PackageId]),
     %% עדכון סטטוס חבילה
     package:update_status(PackageId, picking_up),
-    %% זמן נסיעה למסעדה רנדומלי בין 10 ל-60 שניות
-    PickupMs = rand_time(),
+    %% זמן נסיעה למסעדה רנדומלי לפי ההגדרות
+    PickupMs = get_dynamic_travel_time(),
     io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
 
     %% דיווח למערכת הניטור על שינוי המצב
@@ -90,8 +95,8 @@ handle_event(info, pickup_complete, picking_up, Data) ->
     PackageId = maps:get(package, Data),
     io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
     package:update_status(PackageId, in_transit),
-    %% זמן נסיעה ללקוח רנדומלי בין 10 ל-60 שניות
-    DeliveryMs = rand_time(),
+    %% זמן נסיעה ללקוח רנדומלי לפי ההגדרות
+    DeliveryMs = get_dynamic_travel_time(),
     io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
 
     %% דיווח למערכת הניטור
@@ -122,9 +127,6 @@ handle_event(info, delivery_complete, delivering, Data) ->
 
     %% החזר את השליח לתור המרכזי
     courier_pool:return_courier(CourierId),
-    %% שינוי: אין יותר צורך להודיע לכל האזורים. המאגר המרכזי יטפל בזה.
-    %% AllZones = maps:get(zones, Data),
-    %% notify_all_zones_available(CourierId, AllZones),
 
     %% עדכון הנתונים המקומיים
     NewData = maps:remove(package, Data#{
@@ -167,22 +169,24 @@ handle_event(EventType, Event, StateName, Data) ->
 %% פונקציות עזר
 %% -----------------------------------------------------------
 
-%% פונקציה עזר - זמן רנדומלי בין 10 שניות ל-60 שניות
-rand_time() ->
-    %% ערך רנדומלי בין 10_000 ל-60_000 מילי-שניות
-    (rand:uniform(50_001) + 9_999).
-
-%% שינוי: הפונקציה הזו כבר לא בשימוש
-%% notify_all_zones_available(CourierId, Zones) ->
-%%     lists:foreach(fun(Zone) ->
-%%         ZoneManager = list_to_atom("zone_manager_" ++ Zone),
-%%         case whereis(ZoneManager) of
-%%             undefined ->
-%%                 io:format("Warning: Zone manager ~p not found~n", [Zone]);
-%%             _ ->
-%%                 zone_manager:courier_available(Zone, CourierId)
-%%         end
-%%     end, Zones).
+%% פונקציה עזר חדשה - זמן רנדומלי דינמי לפי ההגדרות
+get_dynamic_travel_time() ->
+    %% קריאת זמני הנסיעה מה-ETS
+    case ets:info(simulation_config) of
+        undefined ->
+            %% אם אין הגדרות, השתמש בברירת מחדל
+            rand:uniform(50001) + 9999;  % 10-60 שניות
+        _ ->
+            case ets:lookup(simulation_config, travel_times) of
+                [{travel_times, MinTime, MaxTime}] ->
+                    %% חישוב זמן רנדומלי בין Min ל-Max
+                    Range = MaxTime - MinTime + 1,
+                    MinTime + rand:uniform(Range) - 1;
+                [] ->
+                    %% אין הגדרות זמן, ברירת מחדל
+                    rand:uniform(50001) + 9999
+            end
+    end.
 
 %% דיווח על שינוי מצב למערכת הניטור
 report_state_change(CourierId, NewStatus, AdditionalData) ->

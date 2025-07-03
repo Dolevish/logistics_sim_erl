@@ -1,25 +1,28 @@
 %% -----------------------------------------------------------
-%% מודול מנהל תור שליחים (Courier Pool) - מתוקן עם Registry
+%% מודול מנהל תור שליחים משופר - תומך במספר דינמי של שליחים
 %% מנהל תור FIFO גלובלי של שליחים פנויים
 %% וגם תור של אזורים הממתינים לשליח
 %% -----------------------------------------------------------
 -module(courier_pool).
 -behaviour(gen_server).
 
-%% API - נוספה פונקציה לבקשת שליח עם ציון האזור המבקש
--export([start_link/0, request_courier/1, return_courier/1, get_queue_status/0]).
+%% API - הוספת פונקציה לאתחול עם מספר שליחים
+-export([start_link/0, start_link/1, request_courier/1, return_courier/1, get_queue_status/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% -----------------------------------------------------------
 %% API Functions
 %% -----------------------------------------------------------
 
-%% התחלת מנהל התור
+%% התחלת מנהל התור עם ברירת מחדל של 8 שליחים
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    start_link(8).
+
+%% התחלת מנהל התור עם מספר שליחים מותאם
+start_link(NumCouriers) when is_integer(NumCouriers), NumCouriers > 0 ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [NumCouriers], []).
 
 %% בקשת שליח פנוי מהתור (עם ציון האזור המבקש)
-%% ZoneName הוא string
 request_courier(ZoneName) ->
     gen_server:call(?MODULE, {request_courier, ZoneName}).
 
@@ -35,22 +38,22 @@ get_queue_status() ->
 %% gen_server callbacks
 %% -----------------------------------------------------------
 
-init([]) ->
-    io:format("Courier Pool Manager starting...~n"),
-    %% אתחול עם כל השליחים בתור
-    InitialQueue = ["courier1", "courier2", "courier3", "courier4",
-                    "courier5", "courier6", "courier7", "courier8"],
+init([NumCouriers]) ->
+    io:format("Courier Pool Manager starting with ~p couriers...~n", [NumCouriers]),
+    
+    %% יצירת רשימת שליחים דינמית לפי המספר המבוקש
+    InitialQueue = generate_courier_ids(NumCouriers),
+    
     io:format("Courier Pool initialized with queue: ~p~n", [InitialQueue]),
     {ok, #{
         queue => InitialQueue,
         busy_couriers => [],
-        %% שינוי: הוספת תור לאזורים שממתינים לשליח
         waiting_zones => queue:new(),
         total_requests => 0,
         total_returns => 0
     }}.
 
-%% טיפול בבקשת שליח - מתוקן כדי לנהל תור המתנה
+%% טיפול בבקשת שליח
 handle_call({request_courier, ZoneName}, From, State) ->
     Queue = maps:get(queue, State),
     {FromPid, _} = From,
@@ -80,7 +83,6 @@ handle_call(get_queue_status, _From, State) ->
     Status = #{
         available => maps:get(queue, State),
         busy => maps:get(busy_couriers, State),
-        %% שינוי: הוספת מידע על אזורים ממתינים
         waiting_zones => queue:to_list(maps:get(waiting_zones, State)),
         available_count => length(maps:get(queue, State)),
         busy_count => length(maps:get(busy_couriers, State)),
@@ -92,7 +94,7 @@ handle_call(get_queue_status, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-%% טיפול בהחזרת שליח לתור - מתוקן כדי לבדוק אם יש אזורים ממתינים
+%% טיפול בהחזרת שליח לתור
 handle_cast({return_courier, CourierId}, State) ->
     BusyCouriers = maps:get(busy_couriers, State),
     TotalReturns = maps:get(total_returns, State),
@@ -103,7 +105,7 @@ handle_cast({return_courier, CourierId}, State) ->
 
     case queue:out(WaitingZones) of
         {{value, {ZoneName, ZonePid}}, NewWaitingZones} ->
-            %% שינוי: יש אזור שממתין! שלח אליו ישירות את השליח
+            %% יש אזור שממתין! שלח אליו ישירות את השליח
             io:format("Courier Pool: Courier ~p returned and immediately assigned to waiting zone ~p~n", [CourierId, ZoneName]),
             gen_statem:cast(ZonePid, {assign_to_waiting_package, CourierId}),
             %% השליח עובר ישירות לאזור, לא נכנס לתור הפנויים
@@ -127,7 +129,6 @@ handle_cast({return_courier, CourierId}, State) ->
             {noreply, NewState}
     end;
 
-
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -140,3 +141,11 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%% -----------------------------------------------------------
+%% פונקציות עזר פרטיות
+%% -----------------------------------------------------------
+
+%% יצירת רשימת מזהי שליחים דינמית
+generate_courier_ids(NumCouriers) ->
+    ["courier" ++ integer_to_list(N) || N <- lists:seq(1, NumCouriers)].

@@ -1,4 +1,4 @@
-// Logistics Simulator Dashboard - Enhanced WebSocket Connection
+// Enhanced Logistics Simulator Dashboard with Configuration Support
 
 // WebSocket connection
 let ws = null;
@@ -9,6 +9,8 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 
 // Application state
 const appState = {
+    simulationState: 'idle', // idle, running, paused
+    configuration: {},
     couriers: {},
     packages: {},
     zones: {},
@@ -17,57 +19,251 @@ const appState = {
 
 // DOM Elements
 const elements = {
+    // Connection
     connectionStatus: document.getElementById('connectionStatus'),
     connectionText: document.getElementById('connectionText'),
+    
+    // Control buttons
+    startSimBtn: document.getElementById('startSimBtn'),
     pauseBtn: document.getElementById('pauseBtn'),
     resumeBtn: document.getElementById('resumeBtn'),
-    emergencyBtn: document.getElementById('emergencyBtn'),
+    resetBtn: document.getElementById('resetBtn'),
+    
+    // Control panels
+    configControls: document.getElementById('configControls'),
+    runtimeControls: document.getElementById('runtimeControls'),
+    
+    // Main panels
+    configPanel: document.getElementById('configPanel'),
+    runtimePanels: document.getElementById('runtimePanels'),
+    
+    // Form elements
+    configForm: document.getElementById('configForm'),
+    zonesInput: document.getElementById('zones'),
+    numCouriersInput: document.getElementById('numCouriers'),
+    orderIntervalInput: document.getElementById('orderInterval'),
+    minTravelTimeInput: document.getElementById('minTravelTime'),
+    maxTravelTimeInput: document.getElementById('maxTravelTime'),
+    simulationSpeedInput: document.getElementById('simulationSpeed'),
+    
+    // Runtime elements
     ordersList: document.getElementById('ordersList'),
     couriersList: document.getElementById('couriersList'),
     totalOrders: document.getElementById('totalOrders'),
     pendingOrders: document.getElementById('pendingOrders'),
     inTransitOrders: document.getElementById('inTransitOrders'),
-    deliveredOrders: document.getElementById('deliveredOrders')
+    deliveredOrders: document.getElementById('deliveredOrders'),
+    
+    // Footer
+    zonesStatus: document.getElementById('zonesStatus'),
+    configFooter: document.getElementById('configFooter'),
+    zonesContainer: document.getElementById('zonesContainer')
 };
 
 // Initialize the application
 function init() {
-    console.log('Initializing Logistics Dashboard...');
+    console.log('Initializing Enhanced Logistics Dashboard...');
     connectWebSocket();
     setupEventListeners();
+    validateFormInputs();
     
-    setInterval(() => {
-        if (!isConnected) {
-            console.log('Auto-reconnecting due to disconnect...');
-            connectWebSocket();
-        }
-    }, 30000);
+    // Initial UI state
+    updateUIForSimulationState('idle');
 }
 
-// Setup event listeners for control buttons
+// Setup all event listeners
 function setupEventListeners() {
-    elements.pauseBtn.addEventListener('click', () => {
-        sendCommand('pause_simulation');
-        elements.pauseBtn.disabled = true;
-        elements.resumeBtn.disabled = false;
-        appState.isPaused = true;
+    // Configuration controls
+    elements.startSimBtn.addEventListener('click', startSimulation);
+    
+    // Runtime controls
+    elements.pauseBtn.addEventListener('click', pauseSimulation);
+    elements.resumeBtn.addEventListener('click', resumeSimulation);
+    elements.resetBtn.addEventListener('click', resetSimulation);
+    
+    // Form validation
+    elements.configForm.addEventListener('input', validateFormInputs);
+    
+    // Travel time validation
+    elements.minTravelTimeInput.addEventListener('change', () => {
+        const min = parseInt(elements.minTravelTimeInput.value);
+        const max = parseInt(elements.maxTravelTimeInput.value);
+        if (min >= max) {
+            elements.maxTravelTimeInput.value = min + 10;
+        }
     });
-
-    elements.resumeBtn.addEventListener('click', () => {
-        sendCommand('resume_simulation');
-        elements.pauseBtn.disabled = false;
-        elements.resumeBtn.disabled = true;
-        appState.isPaused = false;
-    });
-
-    elements.emergencyBtn.addEventListener('click', () => {
-        if (confirm('Are you sure you want to perform an emergency stop?')) {
-            sendCommand('emergency_stop');
+    
+    elements.maxTravelTimeInput.addEventListener('change', () => {
+        const min = parseInt(elements.minTravelTimeInput.value);
+        const max = parseInt(elements.maxTravelTimeInput.value);
+        if (max <= min) {
+            elements.minTravelTimeInput.value = max - 10;
         }
     });
 }
 
-// Connect to WebSocket server with enhanced reconnection
+// Validate form inputs and enable/disable start button
+function validateFormInputs() {
+    const zones = elements.zonesInput.value.trim();
+    const numCouriers = parseInt(elements.numCouriersInput.value);
+    const orderInterval = parseInt(elements.orderIntervalInput.value);
+    const minTravel = parseInt(elements.minTravelTimeInput.value);
+    const maxTravel = parseInt(elements.maxTravelTimeInput.value);
+    
+    const isValid = zones.length > 0 && 
+                   numCouriers > 0 && numCouriers <= 50 &&
+                   orderInterval > 0 && orderInterval <= 300 &&
+                   minTravel > 0 && maxTravel > minTravel;
+    
+    elements.startSimBtn.disabled = !isValid;
+}
+
+// Start simulation with configuration
+function startSimulation() {
+    // Parse zones from input
+    const zonesArray = elements.zonesInput.value
+        .split(',')
+        .map(z => z.trim())
+        .filter(z => z.length > 0);
+    
+    // Build configuration object
+    const config = {
+        zones: zonesArray,
+        num_couriers: parseInt(elements.numCouriersInput.value),
+        order_interval: parseInt(elements.orderIntervalInput.value) * 1000, // Convert to ms
+        min_travel_time: parseInt(elements.minTravelTimeInput.value) * 1000, // Convert to ms
+        max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000, // Convert to ms
+        simulation_speed: parseFloat(elements.simulationSpeedInput.value)
+    };
+    
+    // Store configuration
+    appState.configuration = config;
+    
+    // Generate zone panels immediately with the configuration
+    generateZonePanels();
+    
+    // Send start command
+    sendCommand('start_simulation', config);
+    
+    // Update UI immediately to show loading state
+    elements.startSimBtn.disabled = true;
+    elements.startSimBtn.textContent = 'Starting...';
+}
+
+// Pause simulation
+function pauseSimulation() {
+    sendCommand('pause_simulation');
+    appState.isPaused = true;
+    updateUIForSimulationState('paused');
+}
+
+// Resume simulation
+function resumeSimulation() {
+    sendCommand('resume_simulation');
+    appState.isPaused = false;
+    updateUIForSimulationState('running');
+}
+
+// Reset simulation
+function resetSimulation() {
+    if (confirm('Are you sure you want to reset the simulation? All current data will be lost.')) {
+        sendCommand('stop_simulation');
+        
+        // Clear local state
+        appState.couriers = {};
+        appState.packages = {};
+        appState.zones = {};
+        
+        // Clear UI
+        elements.ordersList.innerHTML = '';
+        elements.couriersList.innerHTML = '';
+        elements.zonesContainer.innerHTML = '';
+        updateStats();
+    }
+}
+
+// Update UI based on simulation state
+function updateUIForSimulationState(state) {
+    appState.simulationState = state;
+    
+    switch(state) {
+        case 'idle':
+            // Show configuration panel
+            elements.configPanel.style.display = 'block';
+            elements.runtimePanels.style.display = 'none';
+            elements.configControls.style.display = 'flex';
+            elements.runtimeControls.style.display = 'none';
+            elements.zonesStatus.style.display = 'none';
+            elements.configFooter.style.display = 'block';
+            
+            // Reset start button
+            elements.startSimBtn.disabled = false;
+            elements.startSimBtn.textContent = 'Start Simulation';
+            break;
+            
+        case 'running':
+            // Show runtime panels
+            elements.configPanel.style.display = 'none';
+            elements.runtimePanels.style.display = 'flex';
+            elements.configControls.style.display = 'none';
+            elements.runtimeControls.style.display = 'flex';
+            elements.zonesStatus.style.display = 'block';
+            elements.configFooter.style.display = 'none';
+            
+            // Update button states
+            elements.pauseBtn.disabled = false;
+            elements.resumeBtn.disabled = true;
+            
+            // Always regenerate zone panels when running
+            generateZonePanels();
+            break;
+            
+        case 'paused':
+            // Update button states
+            elements.pauseBtn.disabled = true;
+            elements.resumeBtn.disabled = false;
+            break;
+    }
+}
+
+// Generate zone status panels based on configuration
+function generateZonePanels() {
+    console.log('Generating zone panels...');
+    elements.zonesContainer.innerHTML = '';
+    
+    const zones = appState.configuration.zones || ['north', 'center', 'south'];
+    console.log('Zones to generate:', zones);
+    
+    zones.forEach(zone => {
+        // Handle both string and array formats
+        let zoneName = zone;
+        if (Array.isArray(zone)) {
+            // Convert array of char codes to string
+            zoneName = String.fromCharCode(...zone);
+        }
+        
+        const zoneDiv = document.createElement('div');
+        zoneDiv.className = 'zone-item';
+        zoneDiv.setAttribute('data-zone', zoneName);
+        
+        zoneDiv.innerHTML = `
+            <h4>${zoneName.charAt(0).toUpperCase() + zoneName.slice(1)} Zone</h4>
+            <div class="zone-stats">
+                <span>Total: <span class="zone-total">0</span></span>
+                <span>Waiting: <span class="zone-waiting">0</span></span>
+                <span>Active: <span class="zone-active">0</span></span>
+                <span>Delivered: <span class="zone-delivered">0</span></span>
+            </div>
+        `;
+        
+        elements.zonesContainer.appendChild(zoneDiv);
+        console.log('Created zone panel for:', zoneName);
+    });
+    
+    console.log('Zone panels created:', elements.zonesContainer.children.length);
+}
+
+// Connect to WebSocket server
 function connectWebSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) {
         console.log('WebSocket already connected');
@@ -95,9 +291,10 @@ function connectWebSocket() {
             updateConnectionStatus(true);
             clearInterval(reconnectInterval);
             
+            // Request current simulation state
             setTimeout(() => {
                 ws.send(JSON.stringify({
-                    type: 'request_full_state'
+                    type: 'request_simulation_state'
                 }));
             }, 100);
         };
@@ -108,7 +305,6 @@ function connectWebSocket() {
                 handleWebSocketMessage(data);
             } catch (error) {
                 console.error('Error parsing WebSocket message:', error);
-                console.log('Raw message:', event.data);
             }
         };
         
@@ -120,23 +316,10 @@ function connectWebSocket() {
         
         ws.onclose = (event) => {
             clearTimeout(connectionTimeout);
-            console.log(`WebSocket disconnected (code: ${event.code}, reason: ${event.reason})`);
+            console.log(`WebSocket disconnected (code: ${event.code})`);
             isConnected = false;
             updateConnectionStatus(false);
-            
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                const backoffDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-                console.log(`Attempting to reconnect in ${backoffDelay}ms...`);
-                
-                clearInterval(reconnectInterval);
-                reconnectInterval = setTimeout(() => {
-                    reconnectAttempts++;
-                    connectWebSocket();
-                }, backoffDelay);
-            } else {
-                console.log('Max reconnection attempts reached. Manual refresh required.');
-                elements.connectionText.textContent = 'Connection failed - Please refresh';
-            }
+            attemptReconnect();
         };
         
     } catch (error) {
@@ -146,32 +329,88 @@ function connectWebSocket() {
     }
 }
 
-// Handle incoming WebSocket messages with better error handling
-function handleWebSocketMessage(data) {
-    try {
-        console.log('Received:', data.type, data);
+// Handle reconnection attempts
+function attemptReconnect() {
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        const backoffDelay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        console.log(`Attempting to reconnect in ${backoffDelay}ms...`);
         
-        switch (data.type) {
-            case 'state_update':
-                handleStateUpdate(data.update_type, data.data);
-                break;
-            case 'heartbeat':
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({type: 'pong'}));
-                }
-                break;
-            case 'pong':
-                console.log('Received pong from server');
-                break;
-            default:
-                console.warn('Unknown message type:', data.type);
-        }
-    } catch (error) {
-        console.error('Error handling WebSocket message:', error);
+        clearInterval(reconnectInterval);
+        reconnectInterval = setTimeout(() => {
+            reconnectAttempts++;
+            connectWebSocket();
+        }, backoffDelay);
     }
 }
 
-// Handle state updates with better error handling
+// Handle incoming WebSocket messages
+function handleWebSocketMessage(data) {
+    console.log('Received:', data.type, data);
+    
+    switch (data.type) {
+        case 'simulation_state':
+            handleSimulationStateUpdate(data.state, data.config);
+            break;
+            
+        case 'state_update':
+            handleStateUpdate(data.update_type, data.data);
+            break;
+            
+        case 'command_response':
+            handleCommandResponse(data.command, data.success, data.message);
+            break;
+            
+        case 'heartbeat':
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({type: 'pong'}));
+            }
+            break;
+            
+        default:
+            console.log('Unknown message type:', data.type);
+    }
+}
+
+// Handle simulation state updates
+function handleSimulationStateUpdate(state, config) {
+    console.log('Simulation state:', state);
+    console.log('Simulation config:', config);
+    
+    if (config) {
+        // Fix zones if they come as arrays
+        if (config.zones && Array.isArray(config.zones)) {
+            config.zones = config.zones.map(zone => {
+                if (Array.isArray(zone)) {
+                    return String.fromCharCode(...zone);
+                }
+                return zone;
+            });
+        }
+        appState.configuration = config;
+    }
+    
+    updateUIForSimulationState(state);
+    
+    // If simulation just started, request full state
+    if (state === 'running') {
+        setTimeout(() => {
+            sendCommand('request_full_state');
+        }, 500);
+    }
+}
+
+// Handle command responses
+function handleCommandResponse(command, success, message) {
+    console.log(`Command ${command}: ${success ? 'Success' : 'Failed'} - ${message}`);
+    
+    if (command === 'start_simulation' && !success) {
+        // Reset UI if start failed
+        updateUIForSimulationState('idle');
+        alert(`Failed to start simulation: ${message}`);
+    }
+}
+
+// Handle state updates (existing functionality)
 function handleStateUpdate(updateType, data) {
     try {
         console.log('Handling state update:', updateType, data);
@@ -205,7 +444,7 @@ function handleStateUpdate(updateType, data) {
                         delivered_packages: data.delivered_packages || existingCourier.delivered_packages || [],
                         total_delivered: data.total_delivered !== undefined ? 
                             data.total_delivered : 
-                            (existingCourier.total_delivered || (data.delivered_packages || existingCourier.delivered_packages || []).length)
+                            (existingCourier.total_delivered || 0)
                     };
                     updateCourierDisplay(appState.couriers[data.id]);
                 }
@@ -221,6 +460,12 @@ function handleStateUpdate(updateType, data) {
                 
             case 'zone_update':
                 if (data && data.zone) {
+                    // Make sure zone panels exist
+                    if (elements.zonesContainer.children.length === 0) {
+                        console.log('Zone panels missing, generating them now...');
+                        generateZonePanels();
+                    }
+                    
                     appState.zones[data.zone] = data;
                     updateZoneDisplay(data);
                 }
@@ -229,8 +474,12 @@ function handleStateUpdate(updateType, data) {
             case 'full_state':
                 console.log('Received full state:', data);
                 
+                // Clear existing data
+                appState.couriers = {};
+                appState.packages = {};
+                appState.zones = {};
+                
                 if (data.couriers && Array.isArray(data.couriers)) {
-                    appState.couriers = {};
                     data.couriers.forEach(courier => {
                         appState.couriers[courier.id] = courier;
                     });
@@ -238,7 +487,6 @@ function handleStateUpdate(updateType, data) {
                 }
                 
                 if (data.packages && Array.isArray(data.packages)) {
-                    appState.packages = {};
                     data.packages.forEach(pkg => {
                         appState.packages[pkg.id] = pkg;
                     });
@@ -246,6 +494,11 @@ function handleStateUpdate(updateType, data) {
                 }
                 
                 if (data.zones && Array.isArray(data.zones)) {
+                    // Make sure we have zone panels created
+                    if (elements.zonesContainer.children.length === 0) {
+                        generateZonePanels();
+                    }
+                    
                     data.zones.forEach(zone => {
                         appState.zones[zone.zone] = zone;
                         updateZoneDisplay(zone);
@@ -260,14 +513,16 @@ function handleStateUpdate(updateType, data) {
     }
 }
 
-// Send command to server with retry logic
-function sendCommand(action) {
+// Send command to server
+function sendCommand(action, data = {}) {
     if (ws && ws.readyState === WebSocket.OPEN) {
         try {
-            ws.send(JSON.stringify({
-                type: 'command',
-                action: action
-            }));
+            const message = action === 'request_full_state' ? 
+                { type: 'request_full_state' } :
+                { type: 'command', action: action, ...data };
+                
+            console.log('Sending command:', message);
+            ws.send(JSON.stringify(message));
         } catch (error) {
             console.error('Error sending command:', error);
         }
@@ -277,7 +532,7 @@ function sendCommand(action) {
     }
 }
 
-// Update connection status indicator with more states
+// Update connection status indicator
 function updateConnectionStatus(connected) {
     if (connected) {
         elements.connectionStatus.classList.add('connected');
@@ -297,19 +552,15 @@ function updateConnectionStatus(connected) {
 
 // Render all couriers
 function renderCouriers() {
-    try {
-        elements.couriersList.innerHTML = '';
-        Object.values(appState.couriers).forEach(courier => {
-            try {
-                const courierElement = createCourierElement(courier);
-                elements.couriersList.appendChild(courierElement);
-            } catch (error) {
-                console.error('Error rendering courier:', courier, error);
-            }
-        });
-    } catch (error) {
-        console.error('Error in renderCouriers:', error);
-    }
+    elements.couriersList.innerHTML = '';
+    Object.values(appState.couriers).forEach(courier => {
+        try {
+            const courierElement = createCourierElement(courier);
+            elements.couriersList.appendChild(courierElement);
+        } catch (error) {
+            console.error('Error rendering courier:', courier, error);
+        }
+    });
 }
 
 // Create courier DOM element
@@ -357,45 +608,37 @@ function createCourierElement(courier) {
 
 // Update single courier display
 function updateCourierDisplay(courier) {
-    try {
-        const existingElement = document.getElementById(`courier-${courier.id}`);
-        if (existingElement) {
-            existingElement.classList.add('updating');
-            const newElement = createCourierElement(courier);
-            existingElement.replaceWith(newElement);
-            setTimeout(() => {
-                const updatedElement = document.getElementById(`courier-${courier.id}`);
-                if (updatedElement) {
-                    updatedElement.classList.remove('updating');
-                }
-            }, 1000);
-        } else {
-            renderCouriers();
-        }
-    } catch (error) {
-        console.error('Error updating courier display:', error);
+    const existingElement = document.getElementById(`courier-${courier.id}`);
+    if (existingElement) {
+        existingElement.classList.add('updating');
+        const newElement = createCourierElement(courier);
+        existingElement.replaceWith(newElement);
+        setTimeout(() => {
+            const updatedElement = document.getElementById(`courier-${courier.id}`);
+            if (updatedElement) {
+                updatedElement.classList.remove('updating');
+            }
+        }, 1000);
+    } else {
+        renderCouriers();
     }
 }
 
 // Render all packages
 function renderPackages() {
-    try {
-        elements.ordersList.innerHTML = '';
-        
-        const sortedPackages = Object.values(appState.packages)
-            .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-        
-        sortedPackages.forEach(pkg => {
-            try {
-                const packageElement = createPackageElement(pkg);
-                elements.ordersList.appendChild(packageElement);
-            } catch (error) {
-                console.error('Error rendering package:', pkg, error);
-            }
-        });
-    } catch (error) {
-        console.error('Error in renderPackages:', error);
-    }
+    elements.ordersList.innerHTML = '';
+    
+    const sortedPackages = Object.values(appState.packages)
+        .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    
+    sortedPackages.forEach(pkg => {
+        try {
+            const packageElement = createPackageElement(pkg);
+            elements.ordersList.appendChild(packageElement);
+        } catch (error) {
+            console.error('Error rendering package:', pkg, error);
+        }
+    });
 }
 
 // Create package DOM element
@@ -435,67 +678,66 @@ function createPackageElement(pkg) {
 
 // Update single package display
 function updatePackageDisplay(pkg) {
-    try {
-        const existingElement = document.getElementById(`package-${pkg.id}`);
-        if (existingElement) {
-            existingElement.classList.add('updating');
-            const newElement = createPackageElement(pkg);
-            existingElement.replaceWith(newElement);
-            setTimeout(() => {
-                const updatedElement = document.getElementById(`package-${pkg.id}`);
-                if (updatedElement) {
-                    updatedElement.classList.remove('updating');
-                }
-            }, 1000);
-        } else {
-            renderPackages();
-        }
-    } catch (error) {
-        console.error('Error updating package display:', error);
+    const existingElement = document.getElementById(`package-${pkg.id}`);
+    if (existingElement) {
+        existingElement.classList.add('updating');
+        const newElement = createPackageElement(pkg);
+        existingElement.replaceWith(newElement);
+        setTimeout(() => {
+            const updatedElement = document.getElementById(`package-${pkg.id}`);
+            if (updatedElement) {
+                updatedElement.classList.remove('updating');
+            }
+        }, 1000);
+    } else {
+        renderPackages();
     }
 }
 
 // Update zone display
 function updateZoneDisplay(zone) {
-    try {
-        const zoneElement = document.querySelector(`[data-zone="${zone.zone}"]`);
-        if (zoneElement) {
-            const waitingEl = zoneElement.querySelector('.zone-waiting');
-            const activeEl = zoneElement.querySelector('.zone-active');
-            const deliveredEl = zoneElement.querySelector('.zone-delivered');
-            // הערה חדשה: בחירת האלמנט החדש שהוספנו
-            const totalEl = zoneElement.querySelector('.zone-total');
-            
-            if (waitingEl) waitingEl.textContent = zone.waiting_packages || 0;
-            if (activeEl) activeEl.textContent = zone.active_deliveries || 0;
-            if (deliveredEl) deliveredEl.textContent = zone.total_delivered || 0;
-            // הערה חדשה: עדכון התוכן של האלמנט החדש
-            if (totalEl) totalEl.textContent = zone.total_orders || 0;
-        }
-    } catch (error) {
-        console.error('Error updating zone display:', error);
+    console.log('Updating zone display:', zone);
+    const zoneElement = document.querySelector(`[data-zone="${zone.zone}"]`);
+    console.log('Zone element found:', zoneElement);
+    
+    if (zoneElement) {
+        const waitingEl = zoneElement.querySelector('.zone-waiting');
+        const activeEl = zoneElement.querySelector('.zone-active');
+        const deliveredEl = zoneElement.querySelector('.zone-delivered');
+        const totalEl = zoneElement.querySelector('.zone-total');
+        
+        if (waitingEl) waitingEl.textContent = zone.waiting_packages || 0;
+        if (activeEl) activeEl.textContent = zone.active_deliveries || 0;
+        if (deliveredEl) deliveredEl.textContent = zone.total_delivered || 0;
+        if (totalEl) totalEl.textContent = zone.total_orders || 0;
+        
+        console.log('Zone stats updated:', {
+            zone: zone.zone,
+            total: zone.total_orders || 0,
+            waiting: zone.waiting_packages || 0,
+            active: zone.active_deliveries || 0,
+            delivered: zone.total_delivered || 0
+        });
+    } else {
+        console.log('Zone element not found for:', zone.zone);
     }
 }
 
 // Update statistics
 function updateStats() {
-    try {
-        const packages = Object.values(appState.packages);
-        
-        const stats = {
-            total: packages.length,
-            pending: packages.filter(p => p.status === 'ordered').length,
-            inTransit: packages.filter(p => ['assigned', 'picking_up', 'in_transit', 'delivering'].includes(p.status)).length,
-            delivered: packages.filter(p => p.status === 'delivered').length
-        };
-        
-        elements.totalOrders.textContent = stats.total;
-        elements.pendingOrders.textContent = stats.pending;
-        elements.inTransitOrders.textContent = stats.inTransit;
-        elements.deliveredOrders.textContent = stats.delivered;
-    } catch (error) {
-        console.error('Error updating stats:', error);
-    }
+    const packages = Object.values(appState.packages);
+    
+    const stats = {
+        total: packages.length,
+        pending: packages.filter(p => p.status === 'ordered').length,
+        inTransit: packages.filter(p => ['assigned', 'picking_up', 'in_transit', 'delivering'].includes(p.status)).length,
+        delivered: packages.filter(p => p.status === 'delivered').length
+    };
+    
+    elements.totalOrders.textContent = stats.total;
+    elements.pendingOrders.textContent = stats.pending;
+    elements.inTransitOrders.textContent = stats.inTransit;
+    elements.deliveredOrders.textContent = stats.delivered;
 }
 
 // Format ETA for display

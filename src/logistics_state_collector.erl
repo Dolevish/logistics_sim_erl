@@ -1,5 +1,5 @@
 %% -----------------------------------------------------------
-%% מודול איסוף מצב המערכת (State Collector) - מתוקן
+%% מודול איסוף מצב המערכת משופר - תומך במצב סימולציה דינמי
 %% אוסף מידע מכל הרכיבים במערכת ומפיץ עדכונים ל-WebSocket handlers
 %% משמש כ-Event Bus מרכזי וכמקור אמת יחיד (Single Source of Truth) לממשק המשתמש
 %% -----------------------------------------------------------
@@ -9,6 +9,7 @@
 %% API
 -export([start_link/0, subscribe/1, unsubscribe/1]).
 -export([courier_state_changed/2, package_state_changed/2, zone_state_changed/2]).
+-export([simulation_state_changed/2, broadcast_message/1]).
 -export([get_courier_info/1, get_package_info/1, get_zone_info/1, get_full_state/0]).
 
 %% gen_server callbacks
@@ -36,6 +37,12 @@ package_state_changed(PackageId, NewState) ->
 zone_state_changed(Zone, NewState) ->
     gen_server:cast(?MODULE, {zone_update, Zone, NewState}).
 
+simulation_state_changed(SimState, Config) ->
+    gen_server:cast(?MODULE, {simulation_state_update, SimState, Config}).
+
+broadcast_message(Message) ->
+    gen_server:cast(?MODULE, {broadcast, Message}).
+
 get_courier_info(CourierId) ->
     gen_server:call(?MODULE, {get_courier_info, CourierId}).
 
@@ -48,7 +55,6 @@ get_zone_info(Zone) ->
 get_full_state() ->
     gen_server:call(?MODULE, get_full_state).
 
-
 %% -----------------------------------------------------------
 %% gen_server callbacks
 %% -----------------------------------------------------------
@@ -56,6 +62,7 @@ get_full_state() ->
 init([]) ->
     io:format("Logistics State Collector starting...~n"),
     
+    %% יצירת טבלאות ETS רק אם לא קיימות
     case ets:info(courier_states) of
         undefined -> ets:new(courier_states, [named_table, public, {keypos, 1}]);
         _ -> ok
@@ -69,13 +76,16 @@ init([]) ->
         _ -> ok
     end,
     
-    init_courier_states(),
+    %% לא נאתחל שליחים כי הם ייווצרו דינמית
     
+    %% בדיקה תקופתית רק כשהסימולציה רצה
     erlang:send_after(5000, self(), check_system_state),
     
     {ok, #{
         subscribers => [],
-        update_counter => 0
+        update_counter => 0,
+        simulation_state => idle,
+        simulation_config => #{}
     }}.
 
 %% טיפול ב-subscribe
@@ -93,41 +103,93 @@ handle_cast({unsubscribe, HandlerPid}, State) ->
     NewState = State#{subscribers => lists:delete(HandlerPid, Subscribers)},
     {noreply, NewState};
 
+%% טיפול בעדכון מצב סימולציה
+handle_cast({simulation_state_update, SimState, Config}, State) ->
+    io:format("State Collector: Simulation state changed to ~p~n", [SimState]),
+    
+    %% עדכון המצב הפנימי
+    NewState = State#{
+        simulation_state => SimState,
+        simulation_config => Config
+    },
+    
+    %% שידור לכל המנויים
+    Subscribers = maps:get(subscribers, State),
+    lists:foreach(fun(Subscriber) ->
+        Subscriber ! {simulation_state_update, SimState, Config}
+    end, Subscribers),
+    
+    %% אם הסימולציה הופסקה, נקה את הטבלאות
+    case SimState of
+        idle ->
+            clear_all_states();
+        _ ->
+            ok
+    end,
+    
+    {noreply, NewState};
+
+%% טיפול בשידור הודעה כללית
+handle_cast({broadcast, Message}, State) ->
+    Subscribers = maps:get(subscribers, State),
+    lists:foreach(fun(Subscriber) ->
+        Subscriber ! {text, Message}
+    end, Subscribers),
+    {noreply, State};
+
 %% טיפול בעדכון מצב שליח
 handle_cast({courier_update, CourierId, NewState}, State) ->
-    io:format("State Collector: Courier ~p state changed to ~p~n", [CourierId, NewState]),
-    ExistingInfo = case ets:lookup(courier_states, CourierId) of
-        [{_, Info}] -> Info;
-        [] -> #{}
-    end,
-    UpdatedInfo = build_courier_info(CourierId, NewState, ExistingInfo),
-    ets:insert(courier_states, {CourierId, UpdatedInfo}),
-    broadcast_update(<<"courier_update">>, UpdatedInfo, State),
-    Counter = maps:get(update_counter, State),
-    {noreply, State#{update_counter => Counter + 1}};
+    %% בדיקה אם הסימולציה רצה
+    case maps:get(simulation_state, State) of
+        idle ->
+            {noreply, State};
+        _ ->
+            io:format("State Collector: Courier ~p state changed to ~p~n", [CourierId, NewState]),
+            ExistingInfo = case ets:lookup(courier_states, CourierId) of
+                [{_, Info}] -> Info;
+                [] -> #{}
+            end,
+            UpdatedInfo = build_courier_info(CourierId, NewState, ExistingInfo),
+            ets:insert(courier_states, {CourierId, UpdatedInfo}),
+            broadcast_update(<<"courier_update">>, UpdatedInfo, State),
+            Counter = maps:get(update_counter, State),
+            {noreply, State#{update_counter => Counter + 1}}
+    end;
 
 %% טיפול בעדכון מצב חבילה
 handle_cast({package_update, PackageId, NewState}, State) ->
-    io:format("State Collector: Package ~p state changed to ~p~n", [PackageId, NewState]),
-    PackageInfo = build_package_info(PackageId, NewState),
-    ets:insert(package_states, {PackageId, PackageInfo}),
-    broadcast_update(<<"package_update">>, PackageInfo, State),
-    Counter = maps:get(update_counter, State),
-    {noreply, State#{update_counter => Counter + 1}};
+    %% בדיקה אם הסימולציה רצה
+    case maps:get(simulation_state, State) of
+        idle ->
+            {noreply, State};
+        _ ->
+            io:format("State Collector: Package ~p state changed to ~p~n", [PackageId, NewState]),
+            PackageInfo = build_package_info(PackageId, NewState),
+            ets:insert(package_states, {PackageId, PackageInfo}),
+            broadcast_update(<<"package_update">>, PackageInfo, State),
+            Counter = maps:get(update_counter, State),
+            {noreply, State#{update_counter => Counter + 1}}
+    end;
 
 %% טיפול בעדכון מצב אזור
 handle_cast({zone_update, Zone, NewState}, State) ->
-    io:format("State Collector: Zone ~p state changed~n", [Zone]),
-    case ets:info(zone_states) of
-        undefined ->
-            io:format("Warning: zone_states table not ready yet~n"),
+    %% בדיקה אם הסימולציה רצה
+    case maps:get(simulation_state, State) of
+        idle ->
             {noreply, State};
         _ ->
-            ZoneInfo = build_zone_info(Zone, NewState),
-            ets:insert(zone_states, {Zone, ZoneInfo}),
-            broadcast_update(<<"zone_update">>, ZoneInfo, State),
-            Counter = maps:get(update_counter, State),
-            {noreply, State#{update_counter => Counter + 1}}
+            io:format("State Collector: Zone ~p state changed~n", [Zone]),
+            case ets:info(zone_states) of
+                undefined ->
+                    io:format("Warning: zone_states table not ready yet~n"),
+                    {noreply, State};
+                _ ->
+                    ZoneInfo = build_zone_info(Zone, NewState),
+                    ets:insert(zone_states, {Zone, ZoneInfo}),
+                    broadcast_update(<<"zone_update">>, ZoneInfo, State),
+                    Counter = maps:get(update_counter, State),
+                    {noreply, State#{update_counter => Counter + 1}}
+            end
     end;
 
 handle_cast(_Msg, State) ->
@@ -171,9 +233,15 @@ handle_call(_Request, _From, State) ->
 
 %% בדיקה תקופתית של מצב המערכת
 handle_info(check_system_state, State) ->
-    io:format("State Collector: Performing periodic system check~n"),
-    check_all_couriers(),
-    check_all_zones(),
+    %% בודק רק אם הסימולציה רצה
+    case maps:get(simulation_state, State) of
+        idle ->
+            ok;
+        _ ->
+            io:format("State Collector: Performing periodic system check~n"),
+            check_dynamic_couriers(State),
+            check_dynamic_zones(State)
+    end,
     erlang:send_after(5000, self(), check_system_state),
     {noreply, State};
 
@@ -198,23 +266,44 @@ code_change(_OldVsn, State, _Extra) ->
 %% פונקציות עזר פרטיות
 %% -----------------------------------------------------------
 
-init_courier_states() ->
-    CourierIds = ["courier1", "courier2", "courier3", "courier4", 
-                  "courier5", "courier6", "courier7", "courier8"],
+%% ניקוי כל המצבים כשהסימולציה נעצרת
+clear_all_states() ->
+    io:format("State Collector: Clearing all states~n"),
+    ets:delete_all_objects(courier_states),
+    ets:delete_all_objects(package_states),
+    ets:delete_all_objects(zone_states).
+
+%% בדיקה דינמית של שליחים (מבוססת על מה שקיים)
+check_dynamic_couriers(State) ->
+    %% קבלת מספר השליחים מההגדרות
+    Config = maps:get(simulation_config, State, #{}),
+    NumCouriers = maps:get(num_couriers, Config, 8),
     
-    lists:foreach(fun(CourierId) ->
-        InitialInfo = #{
-            id => list_to_binary(CourierId),
-            status => <<"idle">>,
-            current_package => null,
-            delivered_packages => [],
-            total_delivered => 0,
-            zone => null,
-            eta => null,
-            last_update => erlang:system_time(second)
-        },
-        ets:insert(courier_states, {CourierId, InitialInfo})
-    end, CourierIds).
+    %% בדיקת כל השליחים
+    lists:foreach(fun(N) ->
+        CourierId = "courier" ++ integer_to_list(N),
+        case whereis(list_to_atom("courier_" ++ CourierId)) of
+            undefined -> 
+                %% עדכון השליח כ-offline
+                courier_state_changed(CourierId, #{status => offline});
+            _Pid -> 
+                ok
+        end
+    end, lists:seq(1, NumCouriers)).
+
+%% בדיקה דינמית של אזורים (מבוססת על הגדרות)
+check_dynamic_zones(State) ->
+    Config = maps:get(simulation_config, State, #{}),
+    Zones = maps:get(zones, Config, ["north", "center", "south"]),
+    
+    lists:foreach(fun(Zone) ->
+        case whereis(list_to_atom("zone_manager_" ++ Zone)) of
+            undefined -> 
+                zone_state_changed(Zone, #{status => offline});
+            _Pid -> 
+                ok
+        end
+    end, Zones).
 
 build_courier_info(CourierId, NewState, ExistingInfo) ->
     NewStatus = maps:get(status, NewState, idle),
@@ -271,7 +360,6 @@ build_package_info(PackageId, State) ->
         last_update => erlang:system_time(second)
     }.
 
-%% הערה חדשה: הוספת השדה total_orders למידע על האזור
 build_zone_info(Zone, State) ->
     ToBinary = fun(Val) ->
         case Val of
@@ -287,7 +375,7 @@ build_zone_info(Zone, State) ->
         active_deliveries => maps:get(active_deliveries, State, 0),
         total_delivered => maps:get(total_delivered, State, 0),
         failed_deliveries => maps:get(failed_deliveries, State, 0),
-        total_orders => maps:get(total_orders, State, 0), %% הוספת השדה
+        total_orders => maps:get(total_orders, State, 0),
         last_update => erlang:system_time(second)
     }.
 
@@ -296,26 +384,3 @@ broadcast_update(UpdateType, Data, State) ->
     lists:foreach(fun(Subscriber) ->
         Subscriber ! {state_update, UpdateType, Data}
     end, Subscribers).
-
-check_all_couriers() ->
-    CourierIds = ["courier1", "courier2", "courier3", "courier4", 
-                  "courier5", "courier6", "courier7", "courier8"],
-    lists:foreach(fun(CourierId) ->
-        case whereis(list_to_atom("courier_" ++ CourierId)) of
-            undefined -> courier_state_changed(CourierId, #{status => offline});
-            _Pid -> ok
-        end
-    end, CourierIds).
-
-check_all_zones() ->
-    case ets:info(zone_states) of
-        undefined -> ok;
-        _ ->
-            Zones = ["north", "center", "south"],
-            lists:foreach(fun(Zone) ->
-                case whereis(list_to_atom("zone_manager_" ++ Zone)) of
-                    undefined -> zone_state_changed(Zone, #{status => offline});
-                    _Pid -> ok
-                end
-            end, Zones)
-    end.
