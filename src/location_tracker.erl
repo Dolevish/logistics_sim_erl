@@ -85,38 +85,49 @@ handle_call({start_tracking, CourierId, FromLocationId, ToLocationId, Callback},
     io:format("Location Tracker: Starting tracking for courier ~p from ~p to ~p~n", 
               [CourierId, FromLocationId, ToLocationId]),
     
-    %% קבלת מידע על הלוקיישנים
-    case {map_server:get_location(FromLocationId), map_server:get_location(ToLocationId)} of
-        {{ok, FromLoc}, {ok, ToLoc}} ->
-            %% חישוב המסלול והמרחק
-            Distance = calculate_distance(FromLoc, ToLoc),
-            Speed = calculate_speed(),
-            EstimatedTime = Distance / Speed,
-            
-            %% יצירת רשומת מעקב
-            Tracking = #tracking{
-                courier_id = CourierId,
-                start_location = FromLoc,
-                end_location = ToLoc,
-                route = {direct, FromLoc, ToLoc}, % כרגע מסלול ישיר
-                total_distance = Distance,
-                traveled_distance = 0,
-                speed = Speed,
-                start_time = erlang:system_time(second),
-                estimated_arrival = erlang:system_time(second) + round(EstimatedTime),
-                status = moving,
-                update_callback = Callback
-            },
-            
-            %% שמירה ברשימת המעקבים
-            NewTrackings = maps:put(CourierId, Tracking, State#state.active_trackings),
-            
-            %% עדכון מיקום ראשוני
-            update_courier_position(Tracking),
-            
-            {reply, {ok, EstimatedTime}, State#state{active_trackings = NewTrackings}};
-        _ ->
-            {reply, {error, invalid_locations}, State}
+    %% בדיקה אם מדובר באותו מיקום
+    if FromLocationId == ToLocationId ->
+        io:format("Location Tracker: Source and destination are the same, triggering immediate arrival~n"),
+        %% הפעלת ה-callback מיד
+        case Callback of
+            {M, F, A} -> spawn(fun() -> apply(M, F, A) end);
+            Fun when is_function(Fun) -> spawn(Fun)
+        end,
+        {reply, {ok, 0}, State};
+    true ->
+        %% קבלת מידע על הלוקיישנים
+        case {map_server:get_location(FromLocationId), map_server:get_location(ToLocationId)} of
+            {{ok, FromLoc}, {ok, ToLoc}} ->
+                %% חישוב המסלול והמרחק
+                Distance = calculate_distance(FromLoc, ToLoc),
+                Speed = calculate_speed(),
+                EstimatedTime = Distance / Speed,
+                
+                %% יצירת רשומת מעקב
+                Tracking = #tracking{
+                    courier_id = CourierId,
+                    start_location = FromLoc,
+                    end_location = ToLoc,
+                    route = {direct, FromLoc, ToLoc}, % כרגע מסלול ישיר
+                    total_distance = Distance,
+                    traveled_distance = 0,
+                    speed = Speed,
+                    start_time = erlang:system_time(second),
+                    estimated_arrival = erlang:system_time(second) + round(EstimatedTime),
+                    status = moving,
+                    update_callback = Callback
+                },
+                
+                %% שמירה ברשימת המעקבים
+                NewTrackings = maps:put(CourierId, Tracking, State#state.active_trackings),
+                
+                %% עדכון מיקום ראשוני
+                update_courier_position(Tracking),
+                
+                {reply, {ok, EstimatedTime}, State#state{active_trackings = NewTrackings}};
+            _ ->
+                {reply, {error, invalid_locations}, State}
+        end
     end;
 
 %% קבלת סטטוס שליח
@@ -226,7 +237,9 @@ update_courier_position(Tracking) ->
     %% חישוב המיקום הנוכחי על המסלול
     Progress = case Tracking#tracking.total_distance of
         0 -> 1.0;
-        D -> Tracking#tracking.traveled_distance / D
+        0.0 -> 1.0;
+        D when D > 0 -> min(1.0, Tracking#tracking.traveled_distance / D);
+        _ -> 1.0
     end,
     
     %% חישוב קואורדינטות (אינטרפולציה לינארית)
@@ -237,10 +250,12 @@ update_courier_position(Tracking) ->
     CurrentY = StartLoc#location.y + (EndLoc#location.y - StartLoc#location.y) * Progress,
     
     %% חישוב זמן הגעה משוער מעודכן
-    RemainingDistance = Tracking#tracking.total_distance - Tracking#tracking.traveled_distance,
+    RemainingDistance = max(0, Tracking#tracking.total_distance - Tracking#tracking.traveled_distance),
     ETA = case Tracking#tracking.speed of
         0 -> 0;
-        Speed -> round(RemainingDistance / Speed)
+        0.0 -> 0;
+        Speed when Speed > 0 -> round(RemainingDistance / Speed);
+        _ -> 0
     end,
     
     %% הכנת נתוני המיקום
@@ -289,13 +304,17 @@ handle_arrival(Tracking) ->
 build_status_report(Tracking) ->
     Progress = case Tracking#tracking.total_distance of
         0 -> 1.0;
-        D -> Tracking#tracking.traveled_distance / D
+        0.0 -> 1.0;
+        D when D > 0 -> min(1.0, Tracking#tracking.traveled_distance / D);
+        _ -> 1.0
     end,
     
-    RemainingDistance = Tracking#tracking.total_distance - Tracking#tracking.traveled_distance,
+    RemainingDistance = max(0, Tracking#tracking.total_distance - Tracking#tracking.traveled_distance),
     ETA = case Tracking#tracking.speed of
         0 -> 0;
-        Speed -> round(RemainingDistance / Speed)
+        0.0 -> 0;
+        Speed when Speed > 0 -> round(RemainingDistance / Speed);
+        _ -> 0
     end,
     
     #{

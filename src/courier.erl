@@ -312,27 +312,80 @@ handle_event(EventType, Event, StateName, Data) ->
 %% פונקציות עזר
 %% -----------------------------------------------------------
 
+
 %% קבלת מיקומי העסק והבית עבור חבילה
 get_package_locations(PackageId, _Data) ->
-    %% חילוץ האזור מה-ID של החבילה
-    case string:tokens(PackageId, "_") of
-        [Zone | _] ->
+    io:format("Courier: Parsing package ID: ~p~n", [PackageId]),
+    
+    %% פיצול ה-ID לחלקים
+    Tokens = string:tokens(PackageId, "_"),
+    io:format("Courier: Tokens: ~p~n", [Tokens]),
+    
+    %% חיפוש תבנית שמכילה "to" ואחריו home ID
+    case find_home_pattern(Tokens) of
+        {ok, Zone, HomeId} ->
+            io:format("Courier: Found pattern - zone: ~p, home: ~p~n", [Zone, HomeId]),
             %% קבלת העסק באזור
             case map_server:get_business_in_zone(list_to_atom(Zone)) of
                 {ok, Business} ->
-                    %% קבלת בית רנדומלי באזור (בעתיד נקבל את הבית הספציפי)
-                    case map_server:get_random_home_in_zone(list_to_atom(Zone)) of
-                        {ok, Home} ->
-                            {ok, Business#location.id, Home#location.id};
+                    io:format("Courier: Will deliver from ~p to ~p~n", [Business#location.id, HomeId]),
+                    %% החזרת העסק והבית הספציפי
+                    {ok, Business#location.id, HomeId};
+                Error ->
+                    io:format("Courier: Failed to get business for zone ~p: ~p~n", [Zone, Error]),
+                    Error
+            end;
+        {error, _} ->
+            %% נסיון לחלץ את האזור מהטוקן הראשון
+            case Tokens of
+                [Zone | _] ->
+                    io:format("Courier: Using fallback - random home in zone ~p~n", [Zone]),
+                    case map_server:get_business_in_zone(list_to_atom(Zone)) of
+                        {ok, Business} ->
+                            case map_server:get_random_home_in_zone(list_to_atom(Zone)) of
+                                {ok, Home} ->
+                                    io:format("Courier: Will deliver from ~p to ~p~n", [Business#location.id, Home#location.id]),
+                                    {ok, Business#location.id, Home#location.id};
+                                Error ->
+                                    Error
+                            end;
                         Error ->
                             Error
                     end;
-                Error ->
-                    Error
+                _ ->
+                    io:format("Courier: Invalid package ID format: ~p~n", [PackageId]),
+                    {error, invalid_package_id}
+            end
+    end.
+
+%% פונקציה עזר לחיפוש תבנית home בטוקנים
+find_home_pattern([Zone | Rest]) ->
+    case find_to_home_in_list(Rest) of
+        {ok, HomeId} -> {ok, Zone, HomeId};
+        error -> {error, not_found}
+    end;
+find_home_pattern(_) ->
+    {error, invalid_format}.
+
+%% חיפוש "to" ואחריו home ID ברשימה
+find_to_home_in_list(["to" | Rest]) ->
+    case Rest of
+        ["home", NumStr | _] ->
+            %% יש לנו "to" "home" "26"
+            {ok, "home_" ++ NumStr};
+        [HomeIdWithPrefix | _] ->
+            %% אולי יש לנו "to" "home_26"
+            case string:prefix(HomeIdWithPrefix, "home") of
+                nomatch -> error;
+                _ -> {ok, HomeIdWithPrefix}
             end;
         _ ->
-            {error, invalid_package_id}
-    end.
+            error
+    end;
+find_to_home_in_list([_ | Rest]) ->
+    find_to_home_in_list(Rest);
+find_to_home_in_list([]) ->
+    error.
 
 %% טיפול במשלוח ללא מפה (זמנים רנדומליים)
 handle_delivery_without_map(CourierId, PackageId, Data) ->

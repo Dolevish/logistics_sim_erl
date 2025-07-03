@@ -309,12 +309,20 @@ report_map_initialized(MapData) ->
             LocationsData = [location_to_map(L) || L <- LocationsList],
             RoadsData = [road_to_map(R) || R <- RoadsList],
             
+            %% תיקון: במקום לנסות לסריאליז את get_all_zones_info ישירות,
+            %% נשלח רק את הנתונים הבסיסיים
+            ZonesInfo = #{
+                north => #{zone => <<"north">>},
+                center => #{zone => <<"center">>},
+                south => #{zone => <<"south">>}
+            },
+            
             Message = jsx:encode(#{
                 type => <<"map_initialized">>,
                 data => #{
                     locations => LocationsData,
                     roads => RoadsData,
-                    zones => get_all_zones_info()
+                    zones => ZonesInfo
                 }
             }),
             
@@ -327,13 +335,53 @@ report_courier_position_update(CourierId, PositionData) ->
         undefined ->
             ok;
         _ ->
+            %% המרת atoms לbinaries לפני encoding
+            SafePositionData = convert_position_data_to_safe(PositionData),
+            
             Message = jsx:encode(#{
                 type => <<"courier_position_update">>,
-                data => maps:merge(#{courier_id => list_to_binary(CourierId)}, PositionData)
+                data => maps:merge(#{courier_id => list_to_binary(CourierId)}, SafePositionData)
             }),
             
             logistics_state_collector:broadcast_message(Message)
     end.
+
+%% המרת position data למבנה בטוח ל-JSON
+convert_position_data_to_safe(PositionData) ->
+    maps:fold(fun(Key, Value, Acc) ->
+        SafeKey = convert_to_binary(Key),
+        SafeValue = convert_value_to_safe(Value),
+        maps:put(SafeKey, SafeValue, Acc)
+    end, #{}, PositionData).
+
+%% המרת ערך בודד לערך בטוח ל-JSON
+convert_value_to_safe(Value) when is_atom(Value) ->
+    atom_to_binary(Value, utf8);
+convert_value_to_safe(Value) when is_list(Value) ->
+    case io_lib:printable_list(Value) of
+        true -> list_to_binary(Value);
+        false -> list_to_binary(io_lib:format("~p", [Value]))
+    end;
+convert_value_to_safe(Value) when is_map(Value) ->
+    maps:fold(fun(K, V, Acc) ->
+        maps:put(convert_to_binary(K), convert_value_to_safe(V), Acc)
+    end, #{}, Value);
+convert_value_to_safe(Value) when is_binary(Value) ->
+    Value;
+convert_value_to_safe(Value) when is_number(Value) ->
+    Value;
+convert_value_to_safe(Value) ->
+    list_to_binary(io_lib:format("~p", [Value])).
+
+%% המרת atom או string לbinary
+convert_to_binary(Value) when is_atom(Value) ->
+    atom_to_binary(Value, utf8);
+convert_to_binary(Value) when is_list(Value) ->
+    list_to_binary(Value);
+convert_to_binary(Value) when is_binary(Value) ->
+    Value;
+convert_to_binary(Value) ->
+    list_to_binary(io_lib:format("~p", [Value])).
 
 %% המרת location לmap
 location_to_map(Location) ->
@@ -354,12 +402,4 @@ road_to_map(Road) ->
         to => list_to_binary(Road#road.to),
         distance => Road#road.distance,
         base_time => Road#road.base_time
-    }.
-
-%% קבלת מידע על כל האזורים
-get_all_zones_info() ->
-    #{
-        north => get_zone_statistics(north),
-        center => get_zone_statistics(center),
-        south => get_zone_statistics(south)
     }.

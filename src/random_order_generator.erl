@@ -73,8 +73,9 @@ handle_info(create_random_order, State) ->
             MapEnabled = maps:get(map_enabled, State, false),
             
             %% יצירת ID של החבילה בהתאם למצב המפה
-            PkgId = if
-                MapEnabled ->
+            %% תיקון: טיפול בכל המקרים האפשריים
+            PkgId = case MapEnabled of
+                true ->
                     %% עם מפה - נסה לקבל בית ספציפי
                     case map_server:get_random_home_in_zone(list_to_atom(RandomZone)) of
                         {ok, Home} ->
@@ -86,8 +87,8 @@ handle_info(create_random_order, State) ->
                             %% נפול בחזרה ל-ID פשוט
                             RandomZone ++ "_" ++ integer_to_list(NextId)
                     end;
-                false ->
-                    %% בלי מפה - ID פשוט
+                _ ->
+                    %% בלי מפה או כל ערך אחר - ID פשוט
                     RandomZone ++ "_" ++ integer_to_list(NextId)
             end,
             
