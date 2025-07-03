@@ -1,7 +1,7 @@
 %% -----------------------------------------------------------
-%% מודול שליח (Courier) משופר - עם זמני נסיעה דינמיים
+%% מודול שליח (Courier) משופר - עם תמיכה במיקומים וניווט
 %% כל תהליך שליח מייצג שליח אמיתי במערכת
-%% עם התקדמות אוטומטית בין המצבים וזמני נסיעה מותאמים אישית
+%% עם התקדמות אוטומטית בין המצבים וזמני נסיעה מבוססי מפה
 %% -----------------------------------------------------------
 
 -module(courier).
@@ -14,6 +14,9 @@
 
 %% Callbacks - שינוי ל-handle_event mode
 -export([callback_mode/0, init/1, handle_event/4, terminate/3, code_change/4]).
+
+%% כלול את קובץ ה-header עם הגדרות ה-records
+-include("map_records.hrl").
 
 %% הגדרת האזורים הקבועים
 -define(FIXED_ZONES, ["north", "center", "south"]).
@@ -50,7 +53,9 @@ init([CourierId]) ->
         zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
         delivered_packages => [],
         total_delivered => 0,
-        paused => false % הוספת משתנה למצב השהיה
+        paused => false, % הוספת משתנה למצב השהיה
+        current_location => undefined, % מיקום נוכחי
+        home_base => undefined % בסיס הבית של השליח
     }}.
 
 %% -----------------------------------------------------------
@@ -75,17 +80,64 @@ handle_event(cast, {assign_delivery, PackageId}, idle, Data) ->
         false ->
             CourierId = maps:get(id, Data),
             io:format("Courier(~p) received new assignment: package ~p - heading to restaurant!~n", [CourierId, PackageId]),
-            %% עדכון סטטוס חבילה
-            package:update_status(PackageId, picking_up),
-            %% זמן נסיעה למסעדה רנדומלי לפי ההגדרות
-            PickupMs = get_dynamic_travel_time(),
-            io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
-
-            %% דיווח למערכת הניטור על שינוי המצב
-            report_state_change(CourierId, picking_up, #{package => PackageId, eta => PickupMs}),
-
-            erlang:send_after(PickupMs, self(), pickup_complete),
-            {next_state, picking_up, Data#{package => PackageId}}
+            
+            %% בדיקה אם המפה מופעלת
+            MapEnabled = case ets:info(simulation_config) of
+                undefined -> false;
+                _ ->
+                    case ets:lookup(simulation_config, map_enabled) of
+                        [{map_enabled, true}] -> true;
+                        _ -> false
+                    end
+            end,
+            
+            case MapEnabled of
+                true ->
+                    %% קבלת מידע על החבילה והיעדים
+                    case get_package_locations(PackageId, Data) of
+                        {ok, BusinessLocation, HomeLocation} ->
+                            %% עדכון סטטוס חבילה
+                            package:update_status(PackageId, picking_up),
+                            
+                            %% קביעת מיקום נוכחי (אם אין, השתמש במיקום העסק של האזור)
+                            CurrentLocation = case maps:get(current_location, Data) of
+                                undefined -> BusinessLocation;
+                                Loc -> Loc
+                            end,
+                            
+                            %% התחלת מעקב אחר התנועה לעסק
+                            StartCallback = fun() -> self() ! pickup_complete end,
+                            case location_tracker:start_tracking(CourierId, CurrentLocation, BusinessLocation, StartCallback) of
+                                {ok, EstimatedTime} ->
+                                    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p seconds~n", 
+                                            [CourierId, PackageId, round(EstimatedTime)]),
+                                    
+                                    %% דיווח למערכת הניטור על שינוי המצב
+                                    report_state_change(CourierId, picking_up, #{
+                                        package => PackageId, 
+                                        eta => round(EstimatedTime * 1000),
+                                        destination => BusinessLocation
+                                    }),
+                                    
+                                    {next_state, picking_up, Data#{
+                                        package => PackageId,
+                                        business_location => BusinessLocation,
+                                        home_location => HomeLocation,
+                                        current_location => CurrentLocation
+                                    }};
+                                Error ->
+                                    io:format("Courier(~p) failed to start tracking: ~p~n", [CourierId, Error]),
+                                    {keep_state, Data}
+                            end;
+                        {error, Reason} ->
+                            io:format("Courier(~p) failed to get package locations: ~p~n", [CourierId, Reason]),
+                            %% נפול בחזרה לשיטה הישנה
+                            handle_delivery_without_map(CourierId, PackageId, Data)
+                    end;
+                false ->
+                    %% המפה לא מופעלת - השתמש בזמנים רנדומליים
+                    handle_delivery_without_map(CourierId, PackageId, Data)
+            end
     end;
 
 %% תיקון: מטפל גם במקרה שיש אזור מקור
@@ -121,18 +173,54 @@ handle_event(info, pickup_complete, picking_up, Data) ->
         false ->
             CourierId = maps:get(id, Data),
             PackageId = maps:get(package, Data),
+            
             io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
             package:update_status(PackageId, in_transit),
-            %% זמן נסיעה ללקוח רנדומלי לפי ההגדרות
-            DeliveryMs = get_dynamic_travel_time(),
-            io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
-
-            %% דיווח למערכת הניטור
-            Zone = maps:get(zone, Data, "unknown"),
-            report_state_change(CourierId, delivering, #{package => PackageId, zone => Zone, eta => DeliveryMs}),
-
-            erlang:send_after(DeliveryMs, self(), delivery_complete),
-            {next_state, delivering, Data}
+            
+            %% בדיקה אם המפה מופעלת
+            MapEnabled = case ets:info(simulation_config) of
+                undefined -> false;
+                _ ->
+                    case ets:lookup(simulation_config, map_enabled) of
+                        [{map_enabled, true}] -> true;
+                        _ -> false
+                    end
+            end,
+            
+            case MapEnabled of
+                true ->
+                    BusinessLocation = maps:get(business_location, Data),
+                    HomeLocation = maps:get(home_location, Data),
+                    
+                    %% עצירת המעקב הקודם
+                    location_tracker:stop_tracking(CourierId),
+                    
+                    %% התחלת מעקב חדש מהעסק לבית הלקוח
+                    DeliveryCallback = fun() -> self() ! delivery_complete end,
+                    case location_tracker:start_tracking(CourierId, BusinessLocation, HomeLocation, DeliveryCallback) of
+                        {ok, EstimatedTime} ->
+                            io:format("Courier(~p) heading to customer with package ~p, ETA: ~p seconds~n", 
+                                    [CourierId, PackageId, round(EstimatedTime)]),
+                            
+                            %% דיווח למערכת הניטור
+                            Zone = maps:get(zone, Data, "unknown"),
+                            report_state_change(CourierId, delivering, #{
+                                package => PackageId, 
+                                zone => Zone, 
+                                eta => round(EstimatedTime * 1000),
+                                destination => HomeLocation
+                            }),
+                            
+                            {next_state, delivering, Data#{current_location => BusinessLocation}};
+                        Error ->
+                            io:format("Courier(~p) failed to start delivery tracking: ~p~n", [CourierId, Error]),
+                            %% נפול בחזרה לשיטה הישנה
+                            handle_pickup_complete_without_map(CourierId, PackageId, Data)
+                    end;
+                false ->
+                    %% המפה לא מופעלת - השתמש בזמנים רנדומליים
+                    handle_pickup_complete_without_map(CourierId, PackageId, Data)
+            end
     end;
 
 %% מצב delivering – שליח בדרכו ללקוח
@@ -144,8 +232,25 @@ handle_event(info, delivery_complete, delivering, Data) ->
         false ->
             CourierId = maps:get(id, Data),
             PackageId = maps:get(package, Data),
+            HomeLocation = maps:get(home_location, Data, undefined),
+            
             io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [CourierId, PackageId]),
             package:update_status(PackageId, delivered),
+            
+            %% עצירת המעקב אם המפה מופעלת
+            MapEnabled = case ets:info(simulation_config) of
+                undefined -> false;
+                _ ->
+                    case ets:lookup(simulation_config, map_enabled) of
+                        [{map_enabled, true}] -> true;
+                        _ -> false
+                    end
+            end,
+            
+            case MapEnabled of
+                true -> location_tracker:stop_tracking(CourierId);
+                false -> ok
+            end,
 
             %% עדכון רשימת החבילות שנמסרו
             DeliveredPackages = maps:get(delivered_packages, Data),
@@ -166,7 +271,10 @@ handle_event(info, delivery_complete, delivering, Data) ->
             NewData = maps:remove(package, Data#{
                 delivered_packages => NewDeliveredPackages,
                 total_delivered => NewTotalDelivered,
-                zone => null
+                zone => null,
+                current_location => HomeLocation, % השליח נשאר במיקום הלקוח האחרון
+                business_location => undefined,
+                home_location => undefined
             }),
 
             {next_state, idle, NewData}
@@ -204,7 +312,59 @@ handle_event(EventType, Event, StateName, Data) ->
 %% פונקציות עזר
 %% -----------------------------------------------------------
 
-%% פונקציה עזר חדשה - זמן רנדומלי דינמי לפי ההגדרות
+%% קבלת מיקומי העסק והבית עבור חבילה
+get_package_locations(PackageId, _Data) ->
+    %% חילוץ האזור מה-ID של החבילה
+    case string:tokens(PackageId, "_") of
+        [Zone | _] ->
+            %% קבלת העסק באזור
+            case map_server:get_business_in_zone(list_to_atom(Zone)) of
+                {ok, Business} ->
+                    %% קבלת בית רנדומלי באזור (בעתיד נקבל את הבית הספציפי)
+                    case map_server:get_random_home_in_zone(list_to_atom(Zone)) of
+                        {ok, Home} ->
+                            {ok, Business#location.id, Home#location.id};
+                        Error ->
+                            Error
+                    end;
+                Error ->
+                    Error
+            end;
+        _ ->
+            {error, invalid_package_id}
+    end.
+
+%% טיפול במשלוח ללא מפה (זמנים רנדומליים)
+handle_delivery_without_map(CourierId, PackageId, Data) ->
+    io:format("Courier(~p) handling delivery without map for package ~p~n", [CourierId, PackageId]),
+    
+    %% עדכון סטטוס חבילה
+    package:update_status(PackageId, picking_up),
+    
+    %% זמן נסיעה למסעדה רנדומלי לפי ההגדרות
+    PickupMs = get_dynamic_travel_time(),
+    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
+    
+    %% דיווח למערכת הניטור על שינוי המצב
+    report_state_change(CourierId, picking_up, #{package => PackageId, eta => PickupMs}),
+    
+    erlang:send_after(PickupMs, self(), pickup_complete),
+    {next_state, picking_up, Data#{package => PackageId}}.
+
+%% טיפול בהשלמת איסוף ללא מפה
+handle_pickup_complete_without_map(CourierId, PackageId, Data) ->
+    %% זמן נסיעה ללקוח רנדומלי לפי ההגדרות
+    DeliveryMs = get_dynamic_travel_time(),
+    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
+    
+    %% דיווח למערכת הניטור
+    Zone = maps:get(zone, Data, "unknown"),
+    report_state_change(CourierId, delivering, #{package => PackageId, zone => Zone, eta => DeliveryMs}),
+    
+    erlang:send_after(DeliveryMs, self(), delivery_complete),
+    {next_state, delivering, Data}.
+
+%% פונקציה עזר - זמן רנדומלי דינמי לפי ההגדרות
 get_dynamic_travel_time() ->
     %% קריאת זמני הנסיעה מה-ETS
     case ets:info(simulation_config) of

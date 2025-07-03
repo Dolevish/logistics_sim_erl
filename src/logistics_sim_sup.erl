@@ -1,7 +1,6 @@
 %% -----------------------------------------------------------
-%% מודול הסופרווייזר הראשי המשופר
-%% מנהל רק את תהליכי התשתית - Control Center, State Collector, Web Server
-%% תהליכי הסימולציה (אזורים, שליחים, מחולל הזמנות) יופעלו דינמית
+%% מודול הסופרווייזר הראשי המשופר עם תמיכה במפה
+%% מנהל את תהליכי התשתית כולל מודולי המפה החדשים
 %% -----------------------------------------------------------
 
 -module(logistics_sim_sup).
@@ -13,12 +12,28 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-%% אתחול הסופרווייזר והגדרת תהליכי התשתית בלבד
+%% אתחול הסופרווייזר והגדרת תהליכי התשתית
 init([]) ->
-    io:format("Main Supervisor starting with infrastructure processes only...~n"),
+    io:format("Main Supervisor starting with infrastructure processes...~n"),
     
-    %% ChildSpecs – רשימת תהליכי התשתית בלבד
+    %% ChildSpecs – רשימת תהליכי התשתית כולל מודולי המפה
     ChildSpecs = [
+        %% Map Server - חייב להיות ראשון כי אחרים תלויים בו
+        #{id => map_server,
+          start => {map_server, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [map_server]},
+
+        %% Location Tracker - למעקב אחר תנועת שליחים
+        #{id => location_tracker,
+          start => {location_tracker, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [location_tracker]},
+
         %% Control Center - המוח המרכזי שמנהל את כל הסימולציה
         #{id => control_center,
           start => {control_center, start_link, []},

@@ -80,6 +80,18 @@
                             <small>Maximum courier travel time</small>
                         </div>
                     </div>
+
+                    <div class="form-group map-option">
+                        <input type="checkbox" id="enableMapView" name="enableMapView">
+                        <label for="enableMapView">
+                            Enable Map Visualization 
+                            <span class="map-info">(Limited to 100 homes for performance, enables real-time courier tracking)</span>
+                        </label>
+                        <small class="map-note">
+                            <strong>With map:</strong> 100 homes + 3 businesses, visual tracking, route-based travel times<br>
+                            <strong>Without map:</strong> 2000 virtual homes, random travel times
+                        </small>
+                    </div>
                 </form>
 
                 <div class="config-info">
@@ -118,6 +130,37 @@
                     <div class="couriers-list" id="couriersList">
                         </div>
                 </section>
+            </section>
+
+            <!-- פאנל המפה החדש -->
+            <section id="mapPanel" class="map-panel" style="display: none;">
+                <h2>Real-Time Map View</h2>
+                <div class="map-container">
+                    <canvas id="mapCanvas" width="1000" height="1000"></canvas>
+                    <div class="map-legend">
+                        <h4>Legend</h4>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: #2ecc71;"></span>
+                            <span>Business</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: #3498db;"></span>
+                            <span>Home</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: #e74c3c;"></span>
+                            <span>Courier (idle)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: #f39c12;"></span>
+                            <span>Courier (picking up)</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: #9b59b6;"></span>
+                            <span>Courier (delivering)</span>
+                        </div>
+                    </div>
+                </div>
             </section>
         </main>
 

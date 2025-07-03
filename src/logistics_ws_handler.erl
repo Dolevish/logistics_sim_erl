@@ -1,7 +1,7 @@
 %% -----------------------------------------------------------
-%% מודול מטפל WebSocket משופר - תומך בהגדרות דינמיות
+%% מודול מטפל WebSocket משופר - תומך בהגדרות דינמיות ומפה
 %% מנהל את החיבורים והתקשורת עם הדפדפן
-%% שולח עדכונים בזמן אמת על מצב המערכת
+%% שולח עדכונים בזמן אמת על מצב המערכת כולל מיקומי שליחים
 %% -----------------------------------------------------------
 -module(logistics_ws_handler).
 -behaviour(cowboy_websocket).
@@ -106,6 +106,10 @@ websocket_info({send_full_state, FullState}, State) ->
         timestamp => erlang:system_time(second)
     },
     {reply, {text, jsx:encode(Update)}, State};
+
+%% טיפול בהודעות גולמיות (למשל מה-map server)
+websocket_info({text, Message}, State) ->
+    {reply, {text, Message}, State};
 
 websocket_info(heartbeat, State) ->
     %% שליחת heartbeat ללקוח
@@ -214,7 +218,7 @@ handle_client_command(Action, _Cmd) ->
 
 
 %% חילוץ הגדרות מפקודת הלקוח
-%% כעת תמיד משתמשים באזורים הקבועים
+%% כעת תומך גם בהגדרת המפה
 extract_config_from_command(Cmd) ->
     %% ברירות מחדל
     DefaultConfig = #{
@@ -222,10 +226,12 @@ extract_config_from_command(Cmd) ->
         num_couriers => 8,
         order_interval => 5000,
         min_travel_time => 10000,
-        max_travel_time => 60000
+        max_travel_time => 60000,
+        enable_map => false,
+        num_homes => 200
     },
 
-    %% חילוץ ערכים מהפקודה - ללא zones כי הם קבועים
+    %% חילוץ ערכים מהפקודה
     NumCouriers = case maps:get(<<"num_couriers">>, Cmd, undefined) of
         undefined -> maps:get(num_couriers, DefaultConfig);
         N when is_integer(N) -> N;
@@ -250,13 +256,28 @@ extract_config_from_command(Cmd) ->
         _ -> maps:get(max_travel_time, DefaultConfig)
     end,
 
+    %% חילוץ הגדרות המפה
+    EnableMap = case maps:get(<<"enable_map">>, Cmd, undefined) of
+        true -> true;
+        false -> false;
+        _ -> false
+    end,
+
+    %% מספר בתים - תלוי אם המפה מופעלת
+    NumHomes = case EnableMap of
+        true -> 100;  % עם מפה - מקסימום 100
+        false -> 2000 % בלי מפה - 2000 וירטואליים
+    end,
+
     %% החזרת המפה המעודכנת - תמיד עם האזורים הקבועים
     #{
         zones => ?FIXED_ZONES,
         num_couriers => NumCouriers,
         order_interval => OrderInterval,
         min_travel_time => MinTravelTime,
-        max_travel_time => MaxTravelTime
+        max_travel_time => MaxTravelTime,
+        enable_map => EnableMap,
+        num_homes => NumHomes
     }.
 
 %% שליחת תגובה לפקודה

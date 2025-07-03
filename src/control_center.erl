@@ -64,7 +64,8 @@ init([]) ->
         zones => ?FIXED_ZONES,  %% שימוש באזורים הקבועים
         healthy_zones => [],
         failed_zones => [],
-        start_time => undefined
+        start_time => undefined,
+        map_enabled => false  %% האם המפה מופעלת
     }}.
 
 %% -----------------------------------------------------------
@@ -77,19 +78,43 @@ idle({call, From}, {start_simulation, Config}, State) ->
 
     %% וידוא שההגדרות משתמשות באזורים הקבועים
     ValidatedConfig = Config#{zones => ?FIXED_ZONES},
+    
+    %% בדיקה אם המפה מופעלת
+    MapEnabled = maps:get(enable_map, Config, false),
+    NumHomes = if 
+        MapEnabled -> maps:get(num_homes, Config, 100);  % עם מפה - מקסימום 100 בתים
+        true -> 2000  % בלי מפה - 2000 בתים וירטואליים
+    end,
+    
+    %% אתחול המפה אם נדרש
+    case MapEnabled of
+        true ->
+            io:format("Initializing map with ~p homes...~n", [NumHomes]),
+            case map_server:initialize_map(NumHomes) of
+                {ok, map_initialized} ->
+                    io:format("Map initialized successfully~n");
+                Error ->
+                    io:format("Failed to initialize map: ~p~n", [Error]),
+                    gen_statem:reply(From, {error, "Failed to initialize map"}),
+                    {keep_state, State}
+            end;
+        false ->
+            io:format("Running simulation without map visualization~n")
+    end,
 
     %% אתחול הסופרווייזר הדינמי
     case start_simulation_supervisor() of
         {ok, SupPid} ->
             %% התחלת רכיבי הסימולציה
-            case start_simulation_components(SupPid, ValidatedConfig) of
+            case start_simulation_components(SupPid, ValidatedConfig#{map_enabled => MapEnabled, num_homes => NumHomes}) of
                 ok ->
                     %% עדכון המצב עם ההגדרות
                     NewState = State#{
-                        simulation_config => ValidatedConfig,
+                        simulation_config => ValidatedConfig#{map_enabled => MapEnabled, num_homes => NumHomes},
                         simulation_sup => SupPid,
                         zones => ?FIXED_ZONES,
-                        start_time => erlang:system_time(second)
+                        start_time => erlang:system_time(second),
+                        map_enabled => MapEnabled
                     },
 
                     %% מעבר למצב אתחול
@@ -376,6 +401,7 @@ start_simulation_components(SupPid, Config) ->
         OrderInterval = maps:get(order_interval, Config, 5000),
         MinTravelTime = maps:get(min_travel_time, Config, 10000),
         MaxTravelTime = maps:get(max_travel_time, Config, 60000),
+        MapEnabled = maps:get(map_enabled, Config, false),
 
         %% עדכון הגדרות ב-ETS
         case ets:info(simulation_config) of
@@ -390,9 +416,11 @@ start_simulation_components(SupPid, Config) ->
         ets:insert(simulation_config, {num_couriers, NumCouriers}),
         ets:insert(simulation_config, {order_interval, OrderInterval}),
         ets:insert(simulation_config, {zones, Zones}),
+        ets:insert(simulation_config, {map_enabled, MapEnabled}),
 
         io:format("Saved configuration with fixed zones: ~p~n", [Zones]),
         io:format("Saved travel times to ETS: Min=~p ms, Max=~p ms~n", [MinTravelTime, MaxTravelTime]),
+        io:format("Map enabled: ~p~n", [MapEnabled]),
 
         %% התחלת Courier Pool
         start_courier_pool(SupPid),
@@ -560,7 +588,8 @@ reset_state() ->
         zones => ?FIXED_ZONES,  %% תמיד האזורים הקבועים
         healthy_zones => [],
         failed_zones => [],
-        start_time => undefined
+        start_time => undefined,
+        map_enabled => false
     }.
 
 %% דיווח על מצב הסימולציה ל-WebSocket handlers

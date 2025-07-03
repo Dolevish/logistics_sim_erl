@@ -1,4 +1,4 @@
-// Enhanced Logistics Simulator Dashboard with Configuration Support
+// Enhanced Logistics Simulator Dashboard with Map Support
 
 // WebSocket connection
 let ws = null;
@@ -17,8 +17,17 @@ const appState = {
     couriers: {},
     packages: {},
     zones: {},
-    isPaused: false
+    isPaused: false,
+    mapEnabled: false,
+    mapData: {
+        locations: [],
+        roads: [],
+        courierPositions: {}
+    }
 };
+
+// Map visualization instance
+let mapVisualization = null;
 
 // DOM Elements
 const elements = {
@@ -48,14 +57,15 @@ const elements = {
     // Main panels
     configPanel: document.getElementById('configPanel'),
     runtimePanels: document.getElementById('runtimePanels'),
+    mapPanel: document.getElementById('mapPanel'),
 
     // Form elements
     configForm: document.getElementById('configForm'),
-    // הוסר: zonesInput - כעת האזורים קבועים
     numCouriersInput: document.getElementById('numCouriers'),
     orderIntervalInput: document.getElementById('orderInterval'),
     minTravelTimeInput: document.getElementById('minTravelTime'),
     maxTravelTimeInput: document.getElementById('maxTravelTime'),
+    enableMapView: document.getElementById('enableMapView'),
 
     // Runtime elements
     ordersList: document.getElementById('ordersList'),
@@ -68,12 +78,15 @@ const elements = {
     // Footer
     zonesStatus: document.getElementById('zonesStatus'),
     configFooter: document.getElementById('configFooter'),
-    zonesContainer: document.getElementById('zonesContainer')
+    zonesContainer: document.getElementById('zonesContainer'),
+
+    // Map elements
+    mapCanvas: document.getElementById('mapCanvas')
 };
 
 // Initialize the application
 function init() {
-    console.log('Initializing Enhanced Logistics Dashboard...');
+    console.log('Initializing Enhanced Logistics Dashboard with Map Support...');
     connectWebSocket();
     setupEventListeners();
     validateFormInputs();
@@ -119,7 +132,6 @@ function setupEventListeners() {
 
 // Validate form inputs and enable/disable start button
 function validateFormInputs() {
-    // הוסר: בדיקת zones - כעת הם קבועים
     const numCouriers = parseInt(elements.numCouriersInput.value);
     const orderInterval = parseInt(elements.orderIntervalInput.value);
     const minTravel = parseInt(elements.minTravelTimeInput.value);
@@ -135,20 +147,28 @@ function validateFormInputs() {
 // Start simulation with configuration
 function startSimulation() {
     // Build configuration object
-    // עכשיו משתמשים באזורים הקבועים במקום לקרוא מהקלט
+    const mapEnabled = elements.enableMapView.checked;
+    
     const config = {
-        zones: FIXED_ZONES, // שימוש באזורים הקבועים
+        zones: FIXED_ZONES,
         num_couriers: parseInt(elements.numCouriersInput.value),
         order_interval: parseInt(elements.orderIntervalInput.value) * 1000, // Convert to ms
         min_travel_time: parseInt(elements.minTravelTimeInput.value) * 1000, // Convert to ms
-        max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000 // Convert to ms
+        max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000, // Convert to ms
+        enable_map: mapEnabled
     };
 
     // Store configuration
     appState.configuration = config;
+    appState.mapEnabled = mapEnabled;
 
     // Generate zone panels immediately with the configuration
     generateZonePanels();
+
+    // Initialize map if enabled
+    if (mapEnabled && !mapVisualization) {
+        mapVisualization = new MapVisualization(elements.mapCanvas);
+    }
 
     // Send start command
     sendCommand('start_simulation', config);
@@ -158,13 +178,235 @@ function startSimulation() {
     elements.startSimBtn.textContent = 'Starting...';
 }
 
+// Map Visualization Class
+class MapVisualization {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.locations = {};
+        this.roads = [];
+        this.courierPositions = {};
+        this.scale = 0.09; // Scale factor to fit 10000x10000 grid into 1000x1000 canvas
+        this.offsetX = 50;
+        this.offsetY = 50;
+        
+        // Colors
+        this.colors = {
+            background: '#f9f9f9',
+            road: '#e0e0e0',
+            home: '#3498db',
+            business: '#2ecc71',
+            courier: {
+                idle: '#e74c3c',
+                picking_up: '#f39c12',
+                delivering: '#9b59b6'
+            },
+            zones: {
+                north: 'rgba(52, 152, 219, 0.1)',
+                center: 'rgba(46, 204, 113, 0.1)',
+                south: 'rgba(231, 76, 60, 0.1)'
+            }
+        };
+
+        this.setupCanvas();
+        this.startAnimation();
+    }
+
+    setupCanvas() {
+        // Set canvas size
+        this.canvas.width = 1000;
+        this.canvas.height = 1000;
+        
+        // Initial draw
+        this.draw();
+    }
+
+    updateMapData(locations, roads) {
+        // Convert locations array to object for easy access
+        this.locations = {};
+        locations.forEach(loc => {
+            this.locations[loc.id] = loc;
+        });
+        
+        this.roads = roads;
+        console.log('Map data updated:', Object.keys(this.locations).length, 'locations,', roads.length, 'roads');
+    }
+
+    updateCourierPosition(courierId, positionData) {
+        this.courierPositions[courierId] = positionData;
+    }
+
+    draw() {
+        // Clear canvas
+        this.ctx.fillStyle = this.colors.background;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // Draw zone backgrounds
+        this.drawZones();
+
+        // Draw roads
+        this.drawRoads();
+
+        // Draw locations
+        this.drawLocations();
+
+        // Draw couriers
+        this.drawCouriers();
+
+        // Draw labels
+        this.drawLabels();
+    }
+
+    drawZones() {
+        this.ctx.save();
+
+        // North zone (top third)
+        this.ctx.fillStyle = this.colors.zones.north;
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height / 3);
+
+        // Center zone (middle third)
+        this.ctx.fillStyle = this.colors.zones.center;
+        this.ctx.fillRect(0, this.canvas.height / 3, this.canvas.width, this.canvas.height / 3);
+
+        // South zone (bottom third)
+        this.ctx.fillStyle = this.colors.zones.south;
+        this.ctx.fillRect(0, 2 * this.canvas.height / 3, this.canvas.width, this.canvas.height / 3);
+
+        this.ctx.restore();
+    }
+
+    drawRoads() {
+        this.ctx.save();
+        this.ctx.strokeStyle = this.colors.road;
+        this.ctx.lineWidth = 2;
+
+        this.roads.forEach(road => {
+            const from = this.locations[road.from];
+            const to = this.locations[road.to];
+            
+            if (from && to) {
+                this.ctx.beginPath();
+                this.ctx.moveTo(
+                    from.x * this.scale + this.offsetX,
+                    from.y * this.scale + this.offsetY
+                );
+                this.ctx.lineTo(
+                    to.x * this.scale + this.offsetX,
+                    to.y * this.scale + this.offsetY
+                );
+                this.ctx.stroke();
+            }
+        });
+
+        this.ctx.restore();
+    }
+
+    drawLocations() {
+        Object.values(this.locations).forEach(loc => {
+            const x = loc.x * this.scale + this.offsetX;
+            const y = loc.y * this.scale + this.offsetY;
+
+            this.ctx.save();
+
+            if (loc.type === 'business') {
+                // Draw business as larger square
+                this.ctx.fillStyle = this.colors.business;
+                this.ctx.fillRect(x - 10, y - 10, 20, 20);
+                this.ctx.strokeStyle = '#27ae60';
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(x - 10, y - 10, 20, 20);
+            } else {
+                // Draw home as circle
+                this.ctx.fillStyle = this.colors.home;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, 5, 0, 2 * Math.PI);
+                this.ctx.fill();
+                this.ctx.strokeStyle = '#2980b9';
+                this.ctx.lineWidth = 1;
+                this.ctx.stroke();
+            }
+
+            this.ctx.restore();
+        });
+    }
+
+    drawCouriers() {
+        Object.entries(this.courierPositions).forEach(([courierId, data]) => {
+            if (data.position) {
+                const x = data.position.x * this.scale + this.offsetX;
+                const y = data.position.y * this.scale + this.offsetY;
+
+                this.ctx.save();
+
+                // Determine color based on status
+                let color = this.colors.courier.idle;
+                if (data.status === 'moving') {
+                    if (data.destination && this.locations[data.destination]) {
+                        const destLoc = this.locations[data.destination];
+                        if (destLoc.type === 'business') {
+                            color = this.colors.courier.picking_up;
+                        } else {
+                            color = this.colors.courier.delivering;
+                        }
+                    }
+                }
+
+                // Draw courier as triangle pointing in direction of movement
+                this.ctx.fillStyle = color;
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, 8, 0, 2 * Math.PI);
+                this.ctx.fill();
+                
+                // Draw courier ID
+                this.ctx.fillStyle = 'white';
+                this.ctx.font = 'bold 10px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(courierId.replace('courier', ''), x, y);
+
+                // Draw progress bar if moving
+                if (data.progress && data.progress < 1) {
+                    this.ctx.strokeStyle = color;
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.arc(x, y, 12, -Math.PI/2, -Math.PI/2 + (2 * Math.PI * data.progress));
+                    this.ctx.stroke();
+                }
+
+                this.ctx.restore();
+            }
+        });
+    }
+
+    drawLabels() {
+        this.ctx.save();
+        this.ctx.font = 'bold 16px Arial';
+        this.ctx.fillStyle = '#2c3e50';
+
+        // Zone labels
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('NORTH ZONE', this.canvas.width / 2, 30);
+        this.ctx.fillText('CENTER ZONE', this.canvas.width / 2, this.canvas.height / 2);
+        this.ctx.fillText('SOUTH ZONE', this.canvas.width / 2, this.canvas.height - 30);
+
+        this.ctx.restore();
+    }
+
+    startAnimation() {
+        const animate = () => {
+            this.draw();
+            requestAnimationFrame(animate);
+        };
+        animate();
+    }
+}
+
 // פונקציות חדשות לטיפול בכפתורים
 function pauseSimulation() {
     sendCommand('pause_simulation');
     appState.isPaused = true;
     updateUIForSimulationState('paused');
-    elements.orderIntervalControl.style.display = 'flex'; // שינוי ל-flex
-    // השבתת כפתור השהיית יצירת הזמנות
+    elements.orderIntervalControl.style.display = 'flex';
     elements.pauseOrderGenBtn.disabled = true;
     elements.continueOrderGenBtn.disabled = true;
 }
@@ -174,7 +416,6 @@ function continueSimulation() {
     appState.isPaused = false;
     updateUIForSimulationState('running');
     elements.orderIntervalControl.style.display = 'none';
-     // הפעלת כפתור השהיית יצירת הזמנות
     elements.pauseOrderGenBtn.disabled = false;
     elements.continueOrderGenBtn.disabled = false;
 }
@@ -182,7 +423,7 @@ function continueSimulation() {
 function pauseOrderGenerator() {
     sendCommand('pause_order_generator');
     updateUIForOrderGeneratorState(true);
-    elements.orderIntervalControl.style.display = 'flex'; // שינוי ל-flex
+    elements.orderIntervalControl.style.display = 'flex';
 }
 
 function continueOrderGenerator() {
@@ -194,7 +435,6 @@ function continueOrderGenerator() {
 function updateOrderInterval() {
     const newInterval = parseInt(elements.newOrderInterval.value);
     if (newInterval > 0) {
-        // המרה לשניות לפני השליחה
         sendCommand('update_order_interval', { interval: newInterval * 1000 });
     }
 }
@@ -208,12 +448,22 @@ function resetSimulation() {
         appState.couriers = {};
         appState.packages = {};
         appState.zones = {};
+        appState.mapData = {
+            locations: [],
+            roads: [],
+            courierPositions: {}
+        };
 
         // Clear UI
         elements.ordersList.innerHTML = '';
         elements.couriersList.innerHTML = '';
         elements.zonesContainer.innerHTML = '';
         updateStats();
+
+        // Clear map if exists
+        if (mapVisualization) {
+            mapVisualization = null;
+        }
     }
 }
 
@@ -226,6 +476,7 @@ function updateUIForSimulationState(state) {
             // Show configuration panel
             elements.configPanel.style.display = 'block';
             elements.runtimePanels.style.display = 'none';
+            elements.mapPanel.style.display = 'none';
             elements.configControls.style.display = 'flex';
             elements.runtimeControls.style.display = 'none';
             elements.zonesStatus.style.display = 'none';
@@ -245,6 +496,11 @@ function updateUIForSimulationState(state) {
             elements.runtimeControls.style.display = 'flex';
             elements.zonesStatus.style.display = 'block';
             elements.configFooter.style.display = 'none';
+
+            // Show map panel if enabled
+            if (appState.mapEnabled) {
+                elements.mapPanel.style.display = 'block';
+            }
 
             // עדכון מצב לחצנים
             elements.pauseSimBtn.style.display = 'inline-block';
@@ -277,13 +533,11 @@ function updateUIForOrderGeneratorState(isPaused) {
     }
 }
 
-
 // Generate zone status panels based on configuration
 function generateZonePanels() {
     console.log('Generating zone panels...');
     elements.zonesContainer.innerHTML = '';
 
-    // תמיד משתמשים באזורים הקבועים
     const zones = FIXED_ZONES;
     console.log('Zones to generate:', zones);
 
@@ -406,19 +660,45 @@ function handleWebSocketMessage(data) {
             handleCommandResponse(data.command, data.success, data.message);
             break;
 
+        case 'map_initialized':
+            handleMapInitialized(data.data);
+            break;
+
+        case 'courier_position_update':
+            handleCourierPositionUpdate(data.data);
+            break;
+
         case 'heartbeat':
-            // תגובה ל-heartbeat מהשרת
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({type: 'pong'}));
             }
             break;
 
         case 'pong':
-            // תגובה מהשרת ל-ping שלנו - אין צורך לעשות כלום
             break;
 
         default:
             console.log('Unknown message type:', data.type);
+    }
+}
+
+// Handle map initialization
+function handleMapInitialized(data) {
+    console.log('Map initialized with data:', data);
+    
+    if (mapVisualization && data.locations && data.roads) {
+        mapVisualization.updateMapData(data.locations, data.roads);
+    }
+    
+    // Store map data
+    appState.mapData.locations = data.locations || [];
+    appState.mapData.roads = data.roads || [];
+}
+
+// Handle courier position updates
+function handleCourierPositionUpdate(data) {
+    if (mapVisualization && data.courier_id) {
+        mapVisualization.updateCourierPosition(data.courier_id, data);
     }
 }
 
@@ -428,9 +708,9 @@ function handleSimulationStateUpdate(state, config) {
     console.log('Simulation config:', config);
 
     if (config) {
-        // תמיד נשתמש באזורים הקבועים
         config.zones = FIXED_ZONES;
         appState.configuration = config;
+        appState.mapEnabled = config.enable_map || false;
     }
 
     updateUIForSimulationState(state);
@@ -507,7 +787,7 @@ function handleStateUpdate(updateType, data) {
                     // Make sure zone panels exist
                     if (elements.zonesContainer.children.length === 0) {
                         console.log('Zone panels missing, generating them now...');
-                        generateZonePAnels();
+                        generateZonePanels();
                     }
 
                     appState.zones[data.zone] = data;
@@ -607,7 +887,7 @@ function renderCouriers() {
     });
 }
 
-// Create courier DOM element
+// Create courier DOM element with location support
 function createCourierElement(courier) {
     const div = document.createElement('div');
     div.className = `courier-item ${courier.status || 'unknown'}`;
@@ -621,6 +901,7 @@ function createCourierElement(courier) {
             <div class="courier-details">
                 <strong>Current Package:</strong> ${courier.current_package}<br>
                 ${courier.zone ? `<strong>Zone:</strong> ${courier.zone}<br>` : ''}
+                ${courier.destination_address ? `<strong>Destination:</strong> ${courier.destination_address}<br>` : ''}
                 ${courier.eta ? `<strong>ETA:</strong> ${formatETA(courier.eta)}` : ''}
             </div>
         `;

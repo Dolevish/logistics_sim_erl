@@ -1,6 +1,6 @@
 %% -----------------------------------------------------------
-%% מודול מחולל הזמנות רנדומלי משופר - תומך באזורים קבועים
-%% יוצר חבילה חדשה כל X שניות באזור רנדומלי מתוך האזורים הקבועים
+%% מודול מחולל הזמנות רנדומלי משופר - תומך במיקומים על המפה
+%% יוצר חבילה חדשה כל X שניות באזור רנדומלי עם בית ספציפי
 %% -----------------------------------------------------------
 -module(random_order_generator).
 -behaviour(gen_server).
@@ -26,7 +26,18 @@ init([]) ->
     %% קריאת interval מההגדרות
     DefaultInterval = get_interval_from_config(),
     
-    io:format("Random Order Generator: Using fixed zones ~p with interval ~p ms~n", [?FIXED_ZONES, DefaultInterval]),
+    %% בדיקה אם המפה מופעלת
+    MapEnabled = case ets:info(simulation_config) of
+        undefined -> false;
+        _ ->
+            case ets:lookup(simulation_config, map_enabled) of
+                [{map_enabled, true}] -> true;
+                _ -> false
+            end
+    end,
+    
+    io:format("Random Order Generator: Using fixed zones ~p with interval ~p ms (Map enabled: ~p)~n", 
+              [?FIXED_ZONES, DefaultInterval, MapEnabled]),
     
     %% תזמון ישיר
     erlang:send_after(DefaultInterval, self(), create_random_order),
@@ -41,7 +52,8 @@ init([]) ->
         next_id => 1, 
         active => true, 
         interval => DefaultInterval,
-        total_orders => 0
+        total_orders => 0,
+        map_enabled => MapEnabled  %% שמירת מצב המפה
     }, ZoneCounters),
     
     {ok, State}.
@@ -58,7 +70,26 @@ handle_info(create_random_order, State) ->
             
             %% יצירת ID ייחודי
             NextId = maps:get(next_id, State),
-            PkgId = RandomZone ++ "_" ++ integer_to_list(NextId),
+            MapEnabled = maps:get(map_enabled, State, false),
+            
+            %% יצירת ID של החבילה בהתאם למצב המפה
+            PkgId = if
+                MapEnabled ->
+                    %% עם מפה - נסה לקבל בית ספציפי
+                    case map_server:get_random_home_in_zone(list_to_atom(RandomZone)) of
+                        {ok, Home} ->
+                            HomeId = extract_home_id(Home),
+                            RandomZone ++ "_order_" ++ integer_to_list(NextId) ++ "_to_" ++ HomeId;
+                        {error, Reason} ->
+                            io:format("Random Order Generator: Failed to get random home in zone ~p: ~p~n", 
+                                     [RandomZone, Reason]),
+                            %% נפול בחזרה ל-ID פשוט
+                            RandomZone ++ "_" ++ integer_to_list(NextId)
+                    end;
+                false ->
+                    %% בלי מפה - ID פשוט
+                    RandomZone ++ "_" ++ integer_to_list(NextId)
+            end,
             
             io:format("Random Order Generator: Creating package ~p for zone ~p~n", [PkgId, RandomZone]),
             
@@ -125,7 +156,8 @@ handle_call(get_stats, _From, State) ->
         total_orders => maps:get(total_orders, State),
         zone_stats => ZoneStats,
         next_id => maps:get(next_id, State),
-        interval => maps:get(interval, State)
+        interval => maps:get(interval, State),
+        map_enabled => maps:get(map_enabled, State, false)
     },
     {reply, Stats, State};
 
@@ -165,6 +197,14 @@ get_interval_from_config() ->
                 [{order_interval, Interval}] -> Interval;
                 [] -> 5000  % ברירת מחדל
             end
+    end.
+
+%% חילוץ מזהה הבית מאובייקט הלוקיישן
+extract_home_id(Home) ->
+    case Home of
+        {location, Id, _, _, _, _, _} -> Id;
+        #{id := Id} -> Id;
+        _ -> "unknown"
     end.
 
 %% הדפסת סטטיסטיקות

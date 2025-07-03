@@ -1,4 +1,4 @@
-/* Enhanced CSS with Configuration Panel Styles */
+/* Enhanced CSS with Configuration Panel Styles and Map Support */
 
 /* Reset and Base Styles */
 * {
@@ -234,6 +234,45 @@ header h1 {
     font-size: 0.85rem;
 }
 
+/* Map Option Styling */
+.map-option {
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+    margin-top: 1rem;
+}
+
+.map-option input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    margin-right: 0.75rem;
+    cursor: pointer;
+}
+
+.map-option label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.map-info {
+    color: #6c757d;
+    font-weight: normal;
+    font-size: 0.9rem;
+    margin-left: 0.5rem;
+}
+
+.map-note {
+    margin-top: 0.75rem;
+    margin-left: 2rem;
+    line-height: 1.5;
+}
+
+.map-note strong {
+    color: #2c3e50;
+}
+
 .config-info {
     margin-top: 2rem;
     padding: 1rem;
@@ -308,6 +347,63 @@ main {
     color: #2c3e50;
     border-bottom: 2px solid #3498db;
     padding-bottom: 0.5rem;
+}
+
+/* Map Panel Styles */
+.map-panel {
+    background-color: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    width: 100%;
+}
+
+.map-panel h2 {
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+    color: #2c3e50;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 0.5rem;
+}
+
+.map-container {
+    display: flex;
+    gap: 2rem;
+    align-items: flex-start;
+}
+
+#mapCanvas {
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    background-color: #f9f9f9;
+    max-width: 100%;
+    height: auto;
+}
+
+.map-legend {
+    background-color: #f8f9fa;
+    padding: 1rem;
+    border-radius: 6px;
+    min-width: 200px;
+}
+
+.map-legend h4 {
+    margin-bottom: 1rem;
+    color: #2c3e50;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.legend-color {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1px solid #ddd;
 }
 
 /* Stats Section */
@@ -697,6 +793,15 @@ footer {
 
     .zones-container {
         grid-template-columns: 1fr; /* במסכים קטנים - עמודה אחת */
+    }
+
+    .map-container {
+        flex-direction: column;
+    }
+
+    #mapCanvas {
+        width: 100%;
+        max-width: 600px;
     }
 }
 
