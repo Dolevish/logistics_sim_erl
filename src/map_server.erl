@@ -24,8 +24,9 @@
 
 %% רשומות פנימיות
 -record(state, {
-    initialized = false,     % האם המפה אותחלה
-    num_homes = 200,        % מספר בתים
+    initialized = false,
+    %% הערה חדשה: num_homes כעת דינמי, אבל נשמור ברירת מחדל לאתחול
+    num_homes = 200,
     courier_positions = #{} % מיקומי שליחים נוכחיים
 }).
 
@@ -88,7 +89,8 @@ init([]) ->
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
     {ok, #state{}}.
 
-handle_call({initialize_map, NumHomes}, _From, State) ->
+%% --- הערה חדשה: הוספת guard clause לוולידציה של מספר הבתים ---
+handle_call({initialize_map, NumHomes}, _From, State) when is_integer(NumHomes), NumHomes >= 100, NumHomes =< 2000 ->
     io:format("Map Server: Initializing map with ~p homes...~n", [NumHomes]),
     case map_generator:generate_map(NumHomes) of
         {ok, MapData} ->
@@ -100,6 +102,13 @@ handle_call({initialize_map, NumHomes}, _From, State) ->
         Error ->
             {reply, Error, State}
     end;
+
+handle_call({initialize_map, NumHomes}, _From, State) ->
+    %% הערה חדשה: טיפול במקרה שמספר הבתים אינו בתחום המותר
+    io:format("Map Server: Error - invalid number of homes requested: ~p~n", [NumHomes]),
+    Error = {error, {invalid_number_of_homes, NumHomes}},
+    {reply, Error, State};
+
 
 handle_call({get_location, LocationId}, _From, State) ->
     case State#state.initialized of
@@ -398,9 +407,7 @@ dijkstra(StartNode, EndNode) ->
     Previous = maps:new(),
     case dijkstra_loop(EndNode, PriorityQueue, DistancesWithStart, Previous) of
         {ok, FinalPrev} ->
-            %% --- התיקון כאן: הסרת הקריאה המיותרת ל-lists:reverse/1 ---
             {ok, reconstruct_path(EndNode, FinalPrev, [])};
-            %% --- סוף התיקון ---
         {error, Reason} ->
             {error, Reason}
     end.
