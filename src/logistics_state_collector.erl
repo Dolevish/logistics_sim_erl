@@ -295,7 +295,7 @@ check_dynamic_couriers(State) ->
     end, lists:seq(1, NumCouriers)).
 
 %% בדיקה של האזורים הקבועים
-check_fixed_zones(State) ->
+check_fixed_zones(_State) ->
     %% תמיד בודקים את האזורים הקבועים
     lists:foreach(fun(Zone) ->
         case whereis(list_to_atom("zone_manager_" ++ Zone)) of

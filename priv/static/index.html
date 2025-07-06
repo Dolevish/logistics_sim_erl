@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Logistics Simulator - Dynamic Configuration</title>
+    <title>Logistics Simulator - Fixed Map</title>
     <link rel="stylesheet" href="style.css">
 </head><body>
     <div class="container">
@@ -42,33 +42,21 @@
                 <h2>Simulation Configuration</h2>
                 <form id="configForm" class="config-form">
                     <div class="zones-info">
-                        <h3>Delivery Zones</h3>
-                        <p>The simulation operates with 3 fixed zones: North, Center, and South.</p>
+                        <h3>Delivery Zones & Map</h3>
+                        <p>The simulation operates with a fixed map of <strong>100 homes</strong> and 3 businesses, divided into 3 zones: North, Center, and South.</p>
                     </div>
-
                     <div class="form-group">
                         <label for="numCouriers">Number of Couriers:</label>
-                        <input type="number" id="numCouriers" name="numCouriers"
-                               min="1" max="200" value="8" required>
+                        <input type="number" id="numCouriers" name="numCouriers" min="1" max="200" value="8" required>
                         <small>Total number of couriers in the system (1-200).</small>
                     </div>
-
                     <div class="form-group">
                         <label for="orderInterval">Order Generation Interval (seconds):</label>
-                        <input type="number" id="orderInterval" name="orderInterval"
-                               min="1" max="300" value="5" required>
+                        <input type="number" id="orderInterval" name="orderInterval" min="1" max="300" value="5" required>
                         <small>Time between new orders (1-300 seconds).</small>
                     </div>
-
-                    <div class="form-group">
-                        <label for="numHomes">Number of Homes:</label>
-                        <input type="number" id="numHomes" name="numHomes"
-                               min="100" max="2000" value="200" required>
-                        <small>Total number of homes on the map (100-2000).</small>
-                    </div>
                 </form>
-
-                <div class="config-info">
+                 <div class="config-info">
                     <h3>Ready to Start</h3>
                     <p>Configure your simulation parameters above and click "Start Simulation" to begin.</p>
                 </div>
@@ -78,60 +66,30 @@
                 <section class="panel left-panel">
                     <h2>Orders Status</h2>
                     <div class="stats">
-                        <div class="stat-item">
-                            <span class="stat-label">Total Orders:</span>
-                            <span class="stat-value" id="totalOrders">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Pending:</span>
-                            <span class="stat-value" id="pendingOrders">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">In Transit:</span>
-                            <span class="stat-value" id="inTransitOrders">0</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">Delivered:</span>
-                            <span class="stat-value" id="deliveredOrders">0</span>
-                        </div>
+                        <div class="stat-item"><span class="stat-label">Total Orders:</span><span class="stat-value" id="totalOrders">0</span></div>
+                        <div class="stat-item"><span class="stat-label">Pending:</span><span class="stat-value" id="pendingOrders">0</span></div>
+                        <div class="stat-item"><span class="stat-label">In Transit:</span><span class="stat-value" id="inTransitOrders">0</span></div>
+                        <div class="stat-item"><span class="stat-label">Delivered:</span><span class="stat-value" id="deliveredOrders">0</span></div>
                     </div>
-                    <div class="orders-list" id="ordersList">
-                        </div>
+                    <div class="orders-list" id="ordersList"></div>
                 </section>
-
                 <section class="panel right-panel">
                     <h2>Couriers Status</h2>
-                    <div class="couriers-list" id="couriersList">
-                        </div>
+                    <div class="couriers-list" id="couriersList"></div>
                 </section>
             </section>
 
             <section id="mapPanel" class="map-panel" style="display: none;">
                 <h2>Real-Time Map View</h2>
                 <div class="map-container">
-                    <canvas id="mapCanvas" width="1500" height="1500"></canvas>
+                    <canvas id="mapCanvas" width="1200" height="800"></canvas>
                     <div class="map-legend">
                         <h4>Legend</h4>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: #2ecc71;"></span>
-                            <span>Business</span>
-                        </div>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: #3498db;"></span>
-                            <span>Home</span>
-                        </div>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: #e74c3c;"></span>
-                            <span>Courier (idle)</span>
-                        </div>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: #f39c12;"></span>
-                            <span>Courier (picking up)</span>
-                        </div>
-                        <div class="legend-item">
-                            <span class="legend-color" style="background-color: #9b59b6;"></span>
-                            <span>Courier (delivering)</span>
-                        </div>
+                        <div class="legend-item"><span class="legend-color" style="background-color: #2ecc71;"></span><span>Business</span></div>
+                        <div class="legend-item"><span class="legend-color" style="background-color: #3498db;"></span><span>Home</span></div>
+                        <div class="legend-item"><span class="legend-color" style="background-color: #e74c3c;"></span><span>Courier (idle)</span></div>
+                        <div class="legend-item"><span class="legend-color" style="background-color: #f39c12;"></span><span>Courier (picking up)</span></div>
+                        <div class="legend-item"><span class="legend-color" style="background-color: #9b59b6;"></span><span>Courier (delivering)</span></div>
                     </div>
                 </div>
             </section>
@@ -140,16 +98,13 @@
         <footer>
             <div id="zonesStatus" class="zones-status" style="display: none;">
                 <h3>Zone Status</h3>
-                <div class="zones-container" id="zonesContainer">
-                    </div>
+                <div class="zones-container" id="zonesContainer"></div>
             </div>
-
             <div id="configFooter" class="config-footer">
-                <p>Logistics Simulator v2.2 - Configure and run your custom simulation</p>
+                <p>Logistics Simulator v3.2 - Fixed Map Edition</p>
             </div>
         </footer>
     </div>
-
     <script src="app.js"></script>
 </body>
 </html>

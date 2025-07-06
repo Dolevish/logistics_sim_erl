@@ -1,3 +1,8 @@
+%% -----------------------------------------------------------
+%% מודול מרכז הבקרה (Control Center) - FSM
+%% המוח של הסימולציה, מנהל את כל התהליכים והמעבר בין מצבים.
+%% -- גרסה מתוקנת עם תמיכה במפה סטטית וכל יכולות השליטה --
+%% -----------------------------------------------------------
 -module(control_center).
 -behaviour(gen_statem).
 
@@ -9,6 +14,8 @@
 
 %% הגדרת האזורים הקבועים
 -define(FIXED_ZONES, ["north", "center", "south"]).
+%% הערה חדשה: הגדרת מספר הבתים כקבוע במערכת
+-define(FIXED_NUM_HOMES, 100).
 
 %% -----------------------------------------------------------
 %% API Functions - פונקציות ציבוריות לשליטה במרכז הבקרה
@@ -74,23 +81,21 @@ init([]) ->
 %% מצב idle - ממתין להגדרות והפעלת סימולציה
 idle({call, From}, {start_simulation, Config}, State) ->
     io:format("Starting simulation with config: ~p~n", [Config]),
-    NumHomes = maps:get(num_homes, Config, 0),
-    MapEnabled = NumHomes > 0,
-
-    %% --- הערה חדשה: תיקון המבנה הלוגי כדי למנוע אזהרת קומפילציה ---
-    %% התהליך מחולק לשני שלבים:
-    %% 1. אתחול המפה (אם נדרש).
-    %% 2. אם אתחול המפה הצליח (או לא נדרש), ממשיכים לאתחול שאר הרכיבים.
-    case maybe_initialize_map(MapEnabled, NumHomes) of
-        ok ->
-            %% אם המפה אותחלה בהצלחה (או לא נדרשה), ממשיכים
-            start_simulation_components_and_transition(From, Config#{map_enabled => MapEnabled}, State);
+    
+    %% הערה חדשה: שינוי מרכזי - במקום לייצר מפה דינמית,
+    %% אנו קוראים ל-map_server שיטען את המפה הסטטית מהקובץ.
+    case map_server:initialize_map() of
+        {ok, map_initialized} ->
+            %% הערה חדשה: בונים את הגדרות הסימולציה הסופיות עם הערכים הקבועים
+            FinalConfig = Config#{
+                map_enabled => true,
+                num_homes => ?FIXED_NUM_HOMES
+            },
+            start_simulation_components_and_transition(From, FinalConfig, State);
         {error, Reason} ->
-            %% אם אתחול המפה נכשל, מחזירים שגיאה ולא ממשיכים
             io:format("Failed to initialize map: ~p~n", [Reason]),
             {keep_state, State, [{reply, From, {error, {"Failed to initialize map", Reason}}}]}
     end;
-
 
 idle({call, From}, get_status, State) ->
     {keep_state, State, [{reply, From, {idle, State}}]};
@@ -321,21 +326,7 @@ halted(EventType, EventContent, State) ->
 %% פונקציות עזר פרטיות - Dynamic Simulation Management
 %% -----------------------------------------------------------
 
-%% --- הערה חדשה: פונקציית עזר לבדיקה ואתחול המפה ---
-maybe_initialize_map(false, _) ->
-    io:format("Running simulation without map visualization (num_homes=0)~n"),
-    ok;
-maybe_initialize_map(true, NumHomes) ->
-    io:format("Initializing map with ~p homes...~n", [NumHomes]),
-    case map_server:initialize_map(NumHomes) of
-        {ok, map_initialized} ->
-            io:format("Map initialized successfully~n"),
-            ok;
-        Error ->
-            Error
-    end.
-
-%% --- הערה חדשה: פונקציית עזר להמשך התהליך אחרי אתחול המפה ---
+%% פונקציית עזר להמשך התהליך אחרי אתחול המפה
 start_simulation_components_and_transition(From, Config, State) ->
     ValidatedConfig = Config#{zones => ?FIXED_ZONES},
     case start_simulation_supervisor() of
@@ -358,7 +349,6 @@ start_simulation_components_and_transition(From, Config, State) ->
             {keep_state, State, [{reply, From, {error, Reason}}]}
     end.
 
-
 %% התחלת סופרווייזר דינמי לסימולציה
 start_simulation_supervisor() ->
     ChildSpec = #{
@@ -380,9 +370,7 @@ start_simulation_supervisor() ->
 %% התחלת כל רכיבי הסימולציה
 start_simulation_components(SupPid, Config) ->
     try
-        Zones = ?FIXED_ZONES,
         NumCouriers = maps:get(num_couriers, Config, 8),
-        NumHomes = maps:get(num_homes, Config, 0),
         OrderInterval = maps:get(order_interval, Config, 5000),
         MapEnabled = maps:get(map_enabled, Config, false),
         case ets:info(simulation_config) of
@@ -390,22 +378,22 @@ start_simulation_components(SupPid, Config) ->
             _ -> ok
         end,
         ets:insert(simulation_config, {num_couriers, NumCouriers}),
-        ets:insert(simulation_config, {num_homes, NumHomes}),
+        ets:insert(simulation_config, {num_homes, ?FIXED_NUM_HOMES}),
         ets:insert(simulation_config, {order_interval, OrderInterval}),
-        ets:insert(simulation_config, {zones, Zones}),
+        ets:insert(simulation_config, {zones, ?FIXED_ZONES}),
         ets:insert(simulation_config, {map_enabled, MapEnabled}),
-        io:format("Saved configuration with fixed zones: ~p~n", [Zones]),
-        io:format("Map enabled: ~p, Homes: ~p~n", [MapEnabled, NumHomes]),
+        io:format("Saved configuration with fixed zones: ~p~n", [?FIXED_ZONES]),
+        io:format("Map enabled: ~p, Homes: ~p~n", [MapEnabled, ?FIXED_NUM_HOMES]),
         start_courier_pool(SupPid),
-        lists:foreach(fun(Zone) -> start_zone_manager(SupPid, Zone) end, Zones),
+        lists:foreach(fun(Zone) -> start_zone_manager(SupPid, Zone) end, ?FIXED_ZONES),
         start_couriers(SupPid, NumCouriers),
         start_order_generator(SupPid, OrderInterval),
         timer:sleep(1000),
         ok
     catch
-        Type:Error ->
-            io:format("Error starting simulation components: ~p:~p~n", [Type, Error]),
-            {error, Error}
+        Type:Error:Stacktrace ->
+            io:format("Error starting simulation components: ~p:~p~nStacktrace: ~p", [Type, Error, Stacktrace]),
+            {error, {Type, Error}}
     end.
 
 %% התחלת Courier Pool
@@ -487,7 +475,9 @@ stop_all_simulation_components(State) ->
 clear_ets_tables() ->
     ets:delete_all_objects(courier_states),
     ets:delete_all_objects(package_states),
-    ets:delete_all_objects(zone_states).
+    ets:delete_all_objects(zone_states),
+    % הערה חדשה: חשוב למחוק גם את טבלת ההגדרות
+    ets:delete(simulation_config).
 
 %% איפוס המצב
 reset_state() ->
@@ -524,14 +514,14 @@ check_zones_health(_State) ->
 handle_zone_failure(Zone) -> io:format("Handling failure of zone: ~p~n", [Zone]).
 
 %% השהיית כל מחוללי ההזמנות
-pause_all_order_generators(_State) ->
+pause_all_order_generators(State) ->
     case whereis(random_order_generator) of
         undefined -> ok;
         _ -> random_order_generator:pause()
     end.
 
 %% המשך כל מחוללי ההזמנות
-resume_all_order_generators(_State) ->
+resume_all_order_generators(State) ->
     case whereis(random_order_generator) of
         undefined -> ok;
         _ -> random_order_generator:resume()
@@ -548,7 +538,7 @@ update_order_interval_in_generator(Interval) ->
 pause_all_couriers(State) ->
     NumCouriers = maps:get(num_couriers, maps:get(simulation_config, State, #{}), 0),
     lists:foreach(fun(N) ->
-        case whereis(list_to_atom("courier_" ++ "courier" ++ integer_to_list(N))) of
+        case whereis(list_to_atom("courier_courier" ++ integer_to_list(N))) of
             undefined -> ok;
             Pid -> gen_statem:cast(Pid, pause)
         end
@@ -557,7 +547,7 @@ pause_all_couriers(State) ->
 resume_all_couriers(State) ->
     NumCouriers = maps:get(num_couriers, maps:get(simulation_config, State, #{}), 0),
     lists:foreach(fun(N) ->
-        case whereis(list_to_atom("courier_" ++ "courier" ++ integer_to_list(N))) of
+        case whereis(list_to_atom("courier_courier" ++ integer_to_list(N))) of
             undefined -> ok;
             Pid -> gen_statem:cast(Pid, resume)
         end
