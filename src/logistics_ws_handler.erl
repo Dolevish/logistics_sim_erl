@@ -146,36 +146,19 @@ extract_config_from_command(Cmd) ->
         zones => ?FIXED_ZONES,
         num_couriers => 8,
         order_interval => 5000,
-        min_travel_time => 10000,
-        max_travel_time => 60000,
-        enable_map => false,
+        enable_map => true,
         num_homes => 200
     },
 
     NumCouriers = maps:get(<<"num_couriers">>, Cmd, maps:get(num_couriers, DefaultConfig)),
     OrderInterval = maps:get(<<"order_interval">>, Cmd, maps:get(order_interval, DefaultConfig)),
-    MinTravelTime = maps:get(<<"min_travel_time">>, Cmd, maps:get(min_travel_time, DefaultConfig)),
-    MaxTravelTime = maps:get(<<"max_travel_time">>, Cmd, maps:get(max_travel_time, DefaultConfig)),
-
-    EnableMap = maps:get(<<"enable_map">>, Cmd, true),
-
-    NumHomes = if
-        EnableMap ->
-            % אם המפה מופעלת, חובה לקרוא את הערך מהלקוח.
-            % אם הערך לא קיים ב-Cmd, נשתמש בברירת המחדל.
-            maps:get(<<"num_homes">>, Cmd, maps:get(num_homes, DefaultConfig));
-        true ->
-            % אם המפה כבויה, אין בתים.
-            0
-    end,
+    NumHomes = maps:get(<<"num_homes">>, Cmd, maps:get(num_homes, DefaultConfig)),
 
     #{
         zones => ?FIXED_ZONES,
         num_couriers => NumCouriers,
         order_interval => OrderInterval,
-        min_travel_time => MinTravelTime,
-        max_travel_time => MaxTravelTime,
-        enable_map => EnableMap,
+        enable_map => true,
         num_homes => NumHomes
     }.
 

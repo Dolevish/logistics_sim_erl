@@ -60,32 +60,7 @@
                         <small>Time between new orders (1-300 seconds).</small>
                     </div>
 
-                    <div class="form-row">
-                        <div class="form-group half">
-                            <label for="minTravelTime">Min Travel Time (seconds):</label>
-                            <input type="number" id="minTravelTime" name="minTravelTime"
-                                   min="5" max="300" value="14" required>
-                            <small>Minimum courier travel time (used if map is disabled).</small>
-                        </div>
-
-                        <div class="form-group half">
-                            <label for="maxTravelTime">Max Travel Time (seconds):</label>
-                            <input type="number" id="maxTravelTime" name="maxTravelTime"
-                                   min="10" max="600" value="40" required>
-                            <small>Maximum courier travel time (used if map is disabled).</small>
-                        </div>
-                    </div>
-
-                    <!-- הערה חדשה: החזרת ה-checkbox לבחירת מצב מפה -->
-                    <div class="form-group map-option">
-                        <input type="checkbox" id="enableMapView" name="enableMapView" checked>
-                        <label for="enableMapView">
-                            Enable Map Visualization
-                        </label>
-                    </div>
-
-                    <!-- הערה חדשה: שדה מספר הבתים שמוצג באופן תלוי -->
-                    <div id="numHomesContainer" class="form-group">
+                    <div class="form-group">
                         <label for="numHomes">Number of Homes:</label>
                         <input type="number" id="numHomes" name="numHomes"
                                min="100" max="2000" value="200" required>

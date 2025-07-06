@@ -18,7 +18,7 @@ const appState = {
     packages: {},
     zones: {},
     isPaused: false,
-    mapEnabled: false,
+    mapEnabled: true,
     mapData: {
         locations: [],
         roads: [],
@@ -51,10 +51,6 @@ const elements = {
     numCouriersInput: document.getElementById('numCouriers'),
     numHomesInput: document.getElementById('numHomes'),
     orderIntervalInput: document.getElementById('orderInterval'),
-    minTravelTimeInput: document.getElementById('minTravelTime'),
-    maxTravelTimeInput: document.getElementById('maxTravelTime'),
-    enableMapView: document.getElementById('enableMapView'),
-    numHomesContainer: document.getElementById('numHomesContainer'),
     ordersList: document.getElementById('ordersList'),
     couriersList: document.getElementById('couriersList'),
     totalOrders: document.getElementById('totalOrders'),
@@ -86,70 +82,35 @@ function setupEventListeners() {
     elements.continueOrderGenBtn.addEventListener('click', continueOrderGenerator);
     elements.updateOrderIntervalBtn.addEventListener('click', updateOrderInterval);
     elements.configForm.addEventListener('input', validateFormInputs);
-
-    elements.enableMapView.addEventListener('change', () => {
-        elements.numHomesContainer.style.display = elements.enableMapView.checked ? 'flex' : 'none';
-        validateFormInputs();
-    });
-
-    elements.minTravelTimeInput.addEventListener('change', () => {
-        const min = parseInt(elements.minTravelTimeInput.value);
-        const max = parseInt(elements.maxTravelTimeInput.value);
-        if (min >= max) {
-            elements.maxTravelTimeInput.value = min + 10;
-        }
-    });
-
-    elements.maxTravelTimeInput.addEventListener('change', () => {
-        const min = parseInt(elements.minTravelTimeInput.value);
-        const max = parseInt(elements.maxTravelTimeInput.value);
-        if (max <= min) {
-            elements.minTravelTimeInput.value = max - 10;
-        }
-    });
 }
 
 // Validate form inputs and enable/disable start button
 function validateFormInputs() {
     const numCouriers = parseInt(elements.numCouriersInput.value);
     const orderInterval = parseInt(elements.orderIntervalInput.value);
-    const minTravel = parseInt(elements.minTravelTimeInput.value);
-    const maxTravel = parseInt(elements.maxTravelTimeInput.value);
-    const mapEnabled = elements.enableMapView.checked;
+    const numHomes = parseInt(elements.numHomesInput.value);
 
-    let homesValid = true;
-    if (mapEnabled) {
-        const numHomes = parseInt(elements.numHomesInput.value);
-        homesValid = numHomes >= 100 && numHomes <= 2000;
-    }
-
-    const isValid = homesValid &&
+    const isValid = numHomes >= 100 && numHomes <= 2000 &&
                    numCouriers > 0 && numCouriers <= 200 &&
-                   orderInterval > 0 && orderInterval <= 300 &&
-                   minTravel > 0 && maxTravel > minTravel;
+                   orderInterval > 0 && orderInterval <= 300;
 
     elements.startSimBtn.disabled = !isValid;
 }
 
 // Start simulation with configuration
 function startSimulation() {
-    const mapEnabled = elements.enableMapView.checked;
-    const numHomes = mapEnabled ? parseInt(elements.numHomesInput.value) : 0;
-    
     const config = {
         zones: FIXED_ZONES,
         num_couriers: parseInt(elements.numCouriersInput.value),
-        num_homes: numHomes,
+        num_homes: parseInt(elements.numHomesInput.value),
         order_interval: parseInt(elements.orderIntervalInput.value) * 1000,
-        min_travel_time: parseInt(elements.minTravelTimeInput.value) * 1000,
-        max_travel_time: parseInt(elements.maxTravelTimeInput.value) * 1000,
-        enable_map: mapEnabled
+        enable_map: true
     };
 
     appState.configuration = config;
-    appState.mapEnabled = mapEnabled;
+    appState.mapEnabled = true;
     generateZonePanels();
-    if (mapEnabled && !mapVisualization) {
+    if (!mapVisualization) {
         mapVisualization = new MapVisualization(elements.mapCanvas);
     }
     sendCommand('start_simulation', config);
@@ -394,8 +355,6 @@ function updateUIForSimulationState(state) {
             elements.orderIntervalControl.style.display = 'none';
             elements.startSimBtn.disabled = false;
             elements.startSimBtn.textContent = 'Start Simulation';
-            elements.enableMapView.checked = true;
-            elements.numHomesContainer.style.display = 'flex';
             break;
         case 'running':
             elements.configPanel.style.display = 'none';
@@ -404,9 +363,7 @@ function updateUIForSimulationState(state) {
             elements.runtimeControls.style.display = 'flex';
             elements.zonesStatus.style.display = 'block';
             elements.configFooter.style.display = 'none';
-            if (appState.mapEnabled) {
-                elements.mapPanel.style.display = 'block';
-            }
+            elements.mapPanel.style.display = 'block';
             elements.pauseSimBtn.style.display = 'inline-block';
             elements.continueSimBtn.style.display = 'none';
             elements.pauseOrderGenBtn.style.display = 'inline-block';

@@ -108,54 +108,38 @@ handle_event(cast, {assign_delivery, PackageId, FromZone}, idle, Data) ->
             CourierId = maps:get(id, Data),
             io:format("Courier(~p) received new assignment: package ~p from zone ~p~n", [CourierId, PackageId, FromZone]),
             
-            MapEnabled = case ets:info(simulation_config) of
-                undefined -> false;
-                _ ->
-                    case ets:lookup(simulation_config, map_enabled) of
-                        [{map_enabled, true}] -> true;
-                        _ -> false
-                    end
-            end,
-            
-            case MapEnabled of
-                true ->
-                    %% משתמשים במיקום הנוכחי של השליח كنقطة מוצא.
-                    CurrentLocation = maps:get(current_location, Data),
-                    case get_package_locations(PackageId, FromZone) of
-                        {ok, BusinessLocation, HomeLocation} ->
-                            package:update_status(PackageId, picking_up),
-                            
-                            CourierPid = self(),
-                            StartCallback = fun() -> CourierPid ! pickup_complete end,
+            CurrentLocation = maps:get(current_location, Data),
+            case get_package_locations(PackageId, FromZone) of
+                {ok, BusinessLocation, HomeLocation} ->
+                    package:update_status(PackageId, picking_up),
+                    
+                    CourierPid = self(),
+                    StartCallback = fun() -> CourierPid ! pickup_complete end,
 
-                            case location_tracker:start_tracking(CourierId, CurrentLocation, BusinessLocation, StartCallback) of
-                                {ok, EstimatedTime} ->
-                                    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p seconds~n", 
-                                            [CourierId, PackageId, round(EstimatedTime)]),
-                                    
-                                    report_state_change(CourierId, picking_up, #{
-                                        package => PackageId, 
-                                        eta => round(EstimatedTime * 1000),
-                                        destination => BusinessLocation
-                                    }),
-                                    
-                                    {next_state, picking_up, Data#{
-                                        package => PackageId,
-                                        zone => FromZone, %% <- שמירת האזור הנוכחי במצב
-                                        business_location => BusinessLocation,
-                                        home_location => HomeLocation
-                                        %% current_location נשאר כפי שהיה
-                                    }};
-                                Error ->
-                                    io:format("Courier(~p) failed to start tracking: ~p~n", [CourierId, Error]),
-                                    {keep_state, Data}
-                            end;
-                        {error, Reason} ->
-                            io:format("Courier(~p) failed to get package locations: ~p~n", [CourierId, Reason]),
-                            handle_delivery_without_map(CourierId, PackageId, Data)
+                    case location_tracker:start_tracking(CourierId, CurrentLocation, BusinessLocation, StartCallback) of
+                        {ok, EstimatedTime} ->
+                            io:format("Courier(~p) will arrive at restaurant for package ~p in ~p seconds~n", 
+                                    [CourierId, PackageId, round(EstimatedTime)]),
+                            
+                            report_state_change(CourierId, picking_up, #{
+                                package => PackageId, 
+                                eta => round(EstimatedTime * 1000),
+                                destination => BusinessLocation
+                            }),
+                            
+                            {next_state, picking_up, Data#{
+                                package => PackageId,
+                                zone => FromZone,
+                                business_location => BusinessLocation,
+                                home_location => HomeLocation
+                            }};
+                        Error ->
+                            io:format("Courier(~p) failed to start tracking: ~p~n", [CourierId, Error]),
+                            {keep_state, Data}
                     end;
-                false ->
-                    handle_delivery_without_map(CourierId, PackageId, Data)
+                {error, Reason} ->
+                    io:format("Courier(~p) failed to get package locations: ~p~n", [CourierId, Reason]),
+                    {keep_state, Data}
             end
     end;
 
@@ -182,45 +166,31 @@ handle_event(info, pickup_complete, picking_up, Data) ->
             io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
             package:update_status(PackageId, in_transit),
             
-            MapEnabled = case ets:info(simulation_config) of
-                undefined -> false;
-                _ ->
-                    case ets:lookup(simulation_config, map_enabled) of
-                        [{map_enabled, true}] -> true;
-                        _ -> false
-                    end
-            end,
+            BusinessLocation = maps:get(business_location, Data),
+            HomeLocation = maps:get(home_location, Data),
             
-            case MapEnabled of
-                true ->
-                    BusinessLocation = maps:get(business_location, Data),
-                    HomeLocation = maps:get(home_location, Data),
-                    
-                    location_tracker:stop_tracking(CourierId),
-                    
-                    CourierPid = self(),
-                    DeliveryCallback = fun() -> CourierPid ! delivery_complete end,
+            location_tracker:stop_tracking(CourierId),
+            
+            CourierPid = self(),
+            DeliveryCallback = fun() -> CourierPid ! delivery_complete end,
 
-                    case location_tracker:start_tracking(CourierId, BusinessLocation, HomeLocation, DeliveryCallback) of
-                        {ok, EstimatedTime} ->
-                            io:format("Courier(~p) heading to customer with package ~p, ETA: ~p seconds~n", 
-                                    [CourierId, PackageId, round(EstimatedTime)]),
-                            
-                            Zone = maps:get(zone, Data, "unknown"),
-                            report_state_change(CourierId, delivering, #{
-                                package => PackageId, 
-                                zone => Zone, 
-                                eta => round(EstimatedTime * 1000),
-                                destination => HomeLocation
-                            }),
-                            
-                            {next_state, delivering, Data#{current_location => BusinessLocation}};
-                        Error ->
-                            io:format("Courier(~p) failed to start delivery tracking: ~p~n", [CourierId, Error]),
-                            handle_pickup_complete_without_map(CourierId, PackageId, Data)
-                    end;
-                false ->
-                    handle_pickup_complete_without_map(CourierId, PackageId, Data)
+            case location_tracker:start_tracking(CourierId, BusinessLocation, HomeLocation, DeliveryCallback) of
+                {ok, EstimatedTime} ->
+                    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p seconds~n", 
+                            [CourierId, PackageId, round(EstimatedTime)]),
+                    
+                    Zone = maps:get(zone, Data, "unknown"),
+                    report_state_change(CourierId, delivering, #{
+                        package => PackageId, 
+                        zone => Zone, 
+                        eta => round(EstimatedTime * 1000),
+                        destination => HomeLocation
+                    }),
+                    
+                    {next_state, delivering, Data#{current_location => BusinessLocation}};
+                Error ->
+                    io:format("Courier(~p) failed to start delivery tracking: ~p~n", [CourierId, Error]),
+                    {keep_state, Data}
             end
     end;
 
@@ -238,19 +208,7 @@ handle_event(info, delivery_complete, delivering, Data) ->
             io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [CourierId, PackageId]),
             package:update_status(PackageId, delivered),
             
-            MapEnabled = case ets:info(simulation_config) of
-                undefined -> false;
-                _ ->
-                    case ets:lookup(simulation_config, map_enabled) of
-                        [{map_enabled, true}] -> true;
-                        _ -> false
-                    end
-            end,
-            
-            case MapEnabled of
-                true -> location_tracker:stop_tracking(CourierId);
-                false -> ok
-            end,
+            location_tracker:stop_tracking(CourierId),
 
             DeliveredPackages = maps:get(delivered_packages, Data),
             TotalDelivered = maps:get(total_delivered, Data),
@@ -356,37 +314,6 @@ find_to_home_in_list([_ | Rest]) ->
     find_to_home_in_list(Rest);
 find_to_home_in_list([]) ->
     error.
-
-handle_delivery_without_map(CourierId, PackageId, Data) ->
-    io:format("Courier(~p) handling delivery without map for package ~p~n", [CourierId, PackageId]),
-    package:update_status(PackageId, picking_up),
-    PickupMs = get_dynamic_travel_time(),
-    io:format("Courier(~p) will arrive at restaurant for package ~p in ~p ms~n", [CourierId, PackageId, PickupMs]),
-    report_state_change(CourierId, picking_up, #{package => PackageId, eta => PickupMs}),
-    erlang:send_after(PickupMs, self(), pickup_complete),
-    {next_state, picking_up, Data#{package => PackageId}}.
-
-handle_pickup_complete_without_map(CourierId, PackageId, Data) ->
-    DeliveryMs = get_dynamic_travel_time(),
-    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p ms~n", [CourierId, PackageId, DeliveryMs]),
-    Zone = maps:get(zone, Data, "unknown"),
-    report_state_change(CourierId, delivering, #{package => PackageId, zone => Zone, eta => DeliveryMs}),
-    erlang:send_after(DeliveryMs, self(), delivery_complete),
-    {next_state, delivering, Data}.
-
-get_dynamic_travel_time() ->
-    case ets:info(simulation_config) of
-        undefined ->
-            rand:uniform(50001) + 9999;
-        _ ->
-            case ets:lookup(simulation_config, travel_times) of
-                [{travel_times, MinTime, MaxTime}] ->
-                    Range = MaxTime - MinTime + 1,
-                    MinTime + rand:uniform(Range) - 1;
-                [] ->
-                    rand:uniform(50001) + 9999
-            end
-    end.
 
 report_state_change(CourierId, NewStatus, AdditionalData) ->
     case whereis(logistics_state_collector) of

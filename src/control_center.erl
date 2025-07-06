@@ -384,14 +384,11 @@ start_simulation_components(SupPid, Config) ->
         NumCouriers = maps:get(num_couriers, Config, 8),
         NumHomes = maps:get(num_homes, Config, 0),
         OrderInterval = maps:get(order_interval, Config, 5000),
-        MinTravelTime = maps:get(min_travel_time, Config, 10000),
-        MaxTravelTime = maps:get(max_travel_time, Config, 60000),
         MapEnabled = maps:get(map_enabled, Config, false),
         case ets:info(simulation_config) of
             undefined -> ets:new(simulation_config, [named_table, public, {keypos, 1}]);
             _ -> ok
         end,
-        ets:insert(simulation_config, {travel_times, MinTravelTime, MaxTravelTime}),
         ets:insert(simulation_config, {num_couriers, NumCouriers}),
         ets:insert(simulation_config, {num_homes, NumHomes}),
         ets:insert(simulation_config, {order_interval, OrderInterval}),
