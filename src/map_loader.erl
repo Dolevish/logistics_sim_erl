@@ -1,7 +1,6 @@
 %% -----------------------------------------------------------
-%% מודול טוען המפה (Map Loader)
-%% אחראי על טעינת מפה סטטית מקובץ JSON
-%% ויצירת גרף קשיר לניווט.
+%% מודול טוען המפה (Map Loader) - גרסה 11 (תיקון ניווט סופי)
+%% מבטיח יצירת גרף דו-כיווני מלא ומסלולים אופטימליים.
 %% -----------------------------------------------------------
 -module(map_loader).
 -export([load_map/0]).
@@ -10,10 +9,9 @@
 
 %% @doc פונקציה ראשית לטעינת המפה.
 load_map() ->
-    io:format("Loading static map from JSON file...~n"),
-    case load_locations_from_json() of
-        {ok, {Locations, RawJsonForFrontend}} ->
-            Roads = generate_roads_from_locations(Locations),
+    io:format("Loading static map and DECONSTRUCTING roads from JSON...~n"),
+    case load_and_parse_json_map() of
+        {ok, {Locations, Roads, RawJsonForFrontend}} ->
             save_map_to_ets(Locations, Roads),
             print_map_statistics(Locations, Roads),
             {ok, RawJsonForFrontend};
@@ -22,150 +20,142 @@ load_map() ->
             {error, Reason}
     end.
 
-%% @doc טוען את המיקומים מקובץ ה-JSON.
-load_locations_from_json() ->
+%% @doc פונקציית על: קוראת את קובץ ה-JSON ומעבדת אותו במלואו.
+load_and_parse_json_map() ->
     try
         PrivDir = code:priv_dir(logistics_sim),
         FilePath = filename:join([PrivDir, "static", "map_data.json"]),
-        case file:read_file(FilePath) of
-            {ok, BinaryData} ->
-                JsonData = jsx:decode(BinaryData, [return_maps]),
-                HomesData = maps:get(<<"homes">>, maps:get(<<"elements">>, JsonData)),
-                BusinessesData = maps:get(<<"businesses">>, maps:get(<<"elements">>, JsonData)),
+        {ok, BinaryData} = file:read_file(FilePath),
+        JsonData = jsx:decode(BinaryData, [return_maps]),
+        Elements = maps:get(<<"elements">>, JsonData),
 
-                Homes = parse_locations(HomesData, home, "home_"),
-                Businesses = parse_businesses(BusinessesData),
+        NamedLocations = parse_named_locations(Elements),
+        
+        JsonRoads = maps:get(<<"roads">>, Elements, []) ++ maps:get(<<"driveways">>, Elements, []),
+        AllLocations = create_all_locations(JsonRoads, NamedLocations),
 
-                {ok, {Homes ++ Businesses, BinaryData}};
-            {error, Reason} ->
-                throw({error, {file_read_error, Reason}})
-        end
+        LogicalRoads = deconstruct_and_rebuild_roads(JsonRoads, AllLocations),
+
+        {ok, {AllLocations, LogicalRoads, BinaryData}}
     catch
-        _:E -> {error, E}
+        Type:Error:Stacktrace -> 
+            io:format("Map loader crash: ~p:~p~n~p~n", [Type, Error, Stacktrace]),
+            {error, {Type, Error}}
     end.
 
-%% @doc ממיר רשימת מיקומים מ-JSON לרשומות #location.
-parse_locations(JsonLocations, Type, IdPrefix) ->
-    {Locations, _} = lists:mapfoldl(
+%% @doc טוען רק את המיקומים בעלי השם (בתים ועסקים).
+parse_named_locations(Elements) ->
+    HomesData = maps:get(<<"homes">>, Elements, []),
+    BusinessesData = maps:get(<<"businesses">>, Elements, []),
+    {HomesList, _} = lists:mapfoldl(
         fun(JsonLoc, Index) ->
-            X = maps:get(<<"x">>, JsonLoc),
-            Y = maps:get(<<"y">>, JsonLoc),
-            Zone = maps:get(<<"zone">>, JsonLoc),
-            Location = #location{
-                id = IdPrefix ++ integer_to_list(Index),
-                type = Type,
-                zone = binary_to_atom(Zone, utf8),
-                x = round(X),
-                y = round(Y),
-                address = "Address for " ++ IdPrefix ++ integer_to_list(Index)
-            },
-            {Location, Index + 1}
-        end,
-        1,
-        JsonLocations
-    ),
-    Locations.
-
-%% @doc ממיר את העסקים מ-JSON לרשומות #location עם ID לפי אזור.
-parse_businesses(JsonBusinesses) ->
-    lists:map(
+            Id = "home_" ++ integer_to_list(Index),
+            {#location{
+                id = Id, type = home, zone = binary_to_atom(maps:get(<<"zone">>, JsonLoc), utf8),
+                x = round(maps:get(<<"x">>, JsonLoc)), y = round(maps:get(<<"y">>, JsonLoc)),
+                address = "Address for " ++ Id}, Index + 1}
+        end, 1, HomesData),
+    Businesses = lists:map(
         fun(JsonLoc) ->
-            X = maps:get(<<"x">>, JsonLoc),
-            Y = maps:get(<<"y">>, JsonLoc),
-            Zone = maps:get(<<"zone">>, JsonLoc),
-            Type = business,
-            Id = "business_" ++ binary_to_list(Zone),
+            ZoneBin = maps:get(<<"zone">>, JsonLoc),
+            Id = "business_" ++ binary_to_list(ZoneBin),
             #location{
-                id = Id,
-                type = Type,
-                zone = binary_to_atom(Zone, utf8),
-                x = round(X),
-                y = round(Y),
-                address = "Business Center " ++ binary_to_list(Zone)
+                id = Id, type = business, zone = binary_to_atom(ZoneBin, utf8),
+                x = round(maps:get(<<"x">>, JsonLoc)), y = round(maps:get(<<"y">>, JsonLoc)),
+                address = "Business Center " ++ binary_to_list(ZoneBin)
             }
+        end, BusinessesData),
+    HomesList ++ Businesses.
+
+%% @doc יוצר רשימה מלאה של כל המיקומים, כולל צמתים וירטואליים.
+create_all_locations(JsonRoads, NamedLocations) ->
+    NamedCoords = sets:from_list([ {L#location.x, L#location.y} || L <- NamedLocations ]),
+    AllRoadEndpoints = lists:foldl(fun(Road, Acc) ->
+        sets:add_element({round(maps:get(<<"x1">>, Road)), round(maps:get(<<"y1">>, Road))},
+        sets:add_element({round(maps:get(<<"x2">>, Road)), round(maps:get(<<"y2">>, Road))}, Acc))
+    end, sets:new(), JsonRoads),
+
+    JunctionCoords = sets:subtract(AllRoadEndpoints, NamedCoords),
+    {Junctions, _} = lists:mapfoldl(
+        fun({X, Y}, Index) ->
+            Id = "junction_" ++ integer_to_list(Index),
+            {#location{id = Id, type = junction, zone = road, x = X, y = Y, address = "Junction"}, Index + 1}
+        end, 1, sets:to_list(JunctionCoords)),
+    NamedLocations ++ Junctions.
+
+%% @doc הלוגיקה המרכזית: מפרקת ובונה מחדש את הכבישים.
+deconstruct_and_rebuild_roads(JsonRoads, AllLocations) ->
+    AllRoadSegments = lists:flatmap(
+        fun(JsonRoad) ->
+            X1 = round(maps:get(<<"x1">>, JsonRoad)), Y1 = round(maps:get(<<"y1">>, JsonRoad)),
+            X2 = round(maps:get(<<"x2">>, JsonRoad)), Y2 = round(maps:get(<<"y2">>, JsonRoad)),
+            
+            PointsOnSegment = find_points_on_segment({X1,Y1}, {X2,Y2}, AllLocations),
+            
+            SortedPoints = lists:sort(
+                fun(A, B) -> 
+                    dist_sq({A#location.x, A#location.y}, {X1,Y1}) < dist_sq({B#location.x, B#location.y}, {X1,Y1})
+                end,
+                PointsOnSegment
+            ),
+            
+            create_roads_from_sorted_list(SortedPoints)
         end,
-        JsonBusinesses
+        JsonRoads
+    ),
+    remove_duplicate_roads(AllRoadSegments).
+
+%% @doc מוצא את כל המיקומים שנמצאים על קטע ישר בין שתי נקודות.
+find_points_on_segment({X1,Y1}, {X2,Y2}, AllLocations) ->
+    lists:filter(
+        fun(Loc) ->
+            PX = Loc#location.x, PY = Loc#location.y,
+            IsOnLine = (min(X1,X2) - 1 =< PX andalso PX =< max(X1,X2) + 1) andalso
+                       (min(Y1,Y2) - 1 =< PY andalso PY =< max(Y1,Y2) + 1),
+            IsCollinear = (Y1-Y2)*(PX-X2) == (PY-Y2)*(X1-X2),
+            IsOnLine andalso IsCollinear
+        end,
+        AllLocations
     ).
 
+%% @doc יוצר רשומות #road מתוך רשימה ממוינת של מיקומים.
+create_roads_from_sorted_list(SortedLocations) ->
+    create_roads_recursive(SortedLocations, []).
+
+create_roads_recursive([_], Acc) -> Acc;
+create_roads_recursive([], Acc) -> Acc;
+create_roads_recursive([L1, L2 | Rest], Acc) ->
+    Dist = calculate_distance(L1, L2),
+    Roads = [
+        #road{id = L1#location.id ++ "_to_" ++ L2#location.id, from = L1#location.id, to = L2#location.id, distance = Dist, base_time = calculate_base_time(Dist)},
+        #road{id = L2#location.id ++ "_to_" ++ L1#location.id, from = L2#location.id, to = L1#location.id, distance = Dist, base_time = calculate_base_time(Dist)}
+    ],
+    create_roads_recursive([L2 | Rest], Roads ++ Acc).
+
 
 %% -----------------------------------------------------------
-%% יצירת רשת כבישים (מבוסס על הלוגיקה המקורית)
+%% פונקציות עזר
 %% -----------------------------------------------------------
-generate_roads_from_locations(Locations) ->
-    io:format("Generating road network based on loaded locations...~n"),
-    HomeToBusinessRoads = generate_home_to_business_roads(Locations),
-    BusinessToBusinessRoads = generate_business_to_business_roads(Locations),
-    HomeToHomeRoads = generate_nearby_home_roads(Locations),
-    AllRoads = HomeToBusinessRoads ++ BusinessToBusinessRoads ++ HomeToHomeRoads,
-    remove_duplicate_roads(AllRoads).
-
-generate_home_to_business_roads(Locations) ->
-    Homes = [L || L <- Locations, L#location.type == home],
-    Businesses = [L || L <- Locations, L#location.type == business],
-    lists:flatmap(fun(Home) ->
-        BusinessInZone = lists:filter(fun(B) -> B#location.zone == Home#location.zone end, Businesses),
-        case BusinessInZone of
-            [Business] ->
-                Distance = calculate_distance(Home, Business),
-                [#road{id = Home#location.id ++ "_to_" ++ Business#location.id, from = Home#location.id, to = Business#location.id, distance = Distance, base_time = calculate_base_time(Distance)},
-                 #road{id = Business#location.id ++ "_to_" ++ Home#location.id, from = Business#location.id, to = Home#location.id, distance = Distance, base_time = calculate_base_time(Distance)}];
-            _ -> []
-        end
-    end, Homes).
-
-generate_business_to_business_roads(Locations) ->
-    Businesses = [L || L <- Locations, L#location.type == business],
-    lists:flatmap(fun(I) ->
-        B1 = lists:nth(I, Businesses),
-        lists:flatmap(fun(J) ->
-            if J > I ->
-                B2 = lists:nth(J, Businesses),
-                Distance = calculate_distance(B1, B2),
-                [#road{id = B1#location.id ++ "_to_" ++ B2#location.id, from = B1#location.id, to = B2#location.id, distance = Distance, base_time = calculate_base_time(Distance)},
-                 #road{id = B2#location.id ++ "_to_" ++ B1#location.id, from = B2#location.id, to = B1#location.id, distance = Distance, base_time = calculate_base_time(Distance)}];
-            true -> []
-            end
-        end, lists:seq(1, length(Businesses)))
-    end, lists:seq(1, length(Businesses))).
-
-generate_nearby_home_roads(Locations) ->
-    Homes = [L || L <- Locations, L#location.type == home],
-    MaxDistance = 1500, % פרמטר לקביעת קרבה, ניתן לכוונון
-    lists:flatmap(fun(Home1) ->
-        NearbyHomes = lists:filter(fun(Home2) ->
-            Home1#location.id =/= Home2#location.id andalso
-            Home1#location.zone == Home2#location.zone andalso % חבר רק בתים באותו אזור
-            calculate_distance(Home1, Home2) =< MaxDistance
-        end, Homes),
-        % חבר לעד 3 השכנים הקרובים ביותר
-        ConnectedHomes = lists:sublist(
-            lists:sort(fun(H1, H2) -> calculate_distance(Home1, H1) =< calculate_distance(Home1, H2) end, NearbyHomes),
-            3
-        ),
-        lists:flatmap(fun(Home2) ->
-            Distance = calculate_distance(Home1, Home2),
-            [#road{id = Home1#location.id ++ "_to_" ++ Home2#location.id, from = Home1#location.id, to = Home2#location.id, distance = Distance, base_time = calculate_base_time(Distance)},
-             #road{id = Home2#location.id ++ "_to_" ++ Home1#location.id, from = Home2#location.id, to = Home1#location.id, distance = Distance, base_time = calculate_base_time(Distance)}]
-        end, ConnectedHomes)
-    end, Homes).
-
-calculate_distance(Loc1, Loc2) ->
-    DX = Loc1#location.x - Loc2#location.x,
-    DY = Loc1#location.y - Loc2#location.y,
+calculate_distance(L1, L2) ->
+    DX = L1#location.x - L2#location.x, DY = L1#location.y - L2#location.y,
     round(math:sqrt(DX*DX + DY*DY)).
 
+dist_sq({X1,Y1}, {X2,Y2}) ->
+    DX = X1 - X2, DY = Y1 - Y2,
+    DX*DX + DY*DY.
+
 calculate_base_time(Distance) ->
-    round(Distance / 11.11). % ~40 קמ"ש
+    round(Distance / 11.11).
 
 remove_duplicate_roads(Roads) ->
     RoadMap = lists:foldl(fun(Road, Map) ->
-        Key = {min(Road#road.from, Road#road.to), max(Road#road.from, Road#road.to)},
+        Key = {Road#road.from, Road#road.to},
         maps:put(Key, Road, Map)
     end, #{}, Roads),
     maps:values(RoadMap).
 
 %% -----------------------------------------------------------
-%% שמירה ב-ETS ובניית הגרף (זהה ל-map_generator)
+%% שמירה ב-ETS ובניית הגרף
 %% -----------------------------------------------------------
 save_map_to_ets(Locations, Roads) ->
     io:format("Saving static map data to ETS tables...~n"),
@@ -179,44 +169,39 @@ save_map_to_ets(Locations, Roads) ->
     io:format("Map data saved successfully~n").
 
 ensure_ets_tables() ->
-    Tables = [
-        {map_locations, [named_table, public, {keypos, 1}]},
-        {map_roads, [named_table, public, {keypos, 1}]},
-        {map_graph, [named_table, public, {keypos, 1}]}
-    ],
-    lists:foreach(fun({Name, Options}) ->
-        case ets:info(Name) of
-            undefined -> ets:new(Name, Options);
-            _ -> ok
-        end
-    end, Tables).
+    Tables = [{map_locations, [named_table, public, {keypos, 1}]}, {map_roads, [named_table, public, {keypos, 1}]}, {map_graph, [named_table, public, {keypos, 1}]}],
+    lists:foreach(fun({Name, Options}) -> case ets:info(Name) of undefined -> ets:new(Name, Options); _ -> ok end end, Tables).
 
 build_graph_structure(Locations, Roads) ->
+    RoadsByFrom = group_by(fun(R) -> R#road.from end, Roads),
     lists:foreach(fun(Loc) ->
         MyId = Loc#location.id,
-        RelatedRoads = [R || R <- Roads, R#road.from == MyId orelse R#road.to == MyId],
-        Neighbors = lists:map(fun(Road) ->
-            NeighborId = if Road#road.from == MyId -> Road#road.to; true -> Road#road.from end,
-            {NeighborId, Road#road.distance, Road#road.base_time}
-        end, RelatedRoads),
+        MyRoads = maps:get(MyId, RoadsByFrom, []),
+        Neighbors = lists:map(fun(R) -> {R#road.to, R#road.distance, R#road.base_time} end, MyRoads),
         ets:insert(map_graph, {MyId, Neighbors})
     end, Locations).
 
+group_by(Fun, List) ->
+    lists:foldl(
+        fun(Elem, Acc) ->
+            Key = Fun(Elem),
+            maps:put(Key, [Elem | maps:get(Key, Acc, [])], Acc)
+        end,
+        #{},
+        List
+    ).
+
 %% -----------------------------------------------------------
-%% הדפסת סטטיסטיקות (זהה ל-map_generator)
+%% הדפסת סטטיסטיקות
 %% -----------------------------------------------------------
 print_map_statistics(Locations, Roads) ->
     NumHomes = length([L || L <- Locations, L#location.type == home]),
     NumBusinesses = length([L || L <- Locations, L#location.type == business]),
-    NorthHomes = length([L || L <- Locations, L#location.type == home, L#location.zone == north]),
-    CenterHomes = length([L || L <- Locations, L#location.type == home, L#location.zone == center]),
-    SouthHomes = length([L || L <- Locations, L#location.type == home, L#location.zone == south]),
-    io:format("~n=== Static Map Loading Complete ===~n"),
-    io:format("Total Locations: ~p~n", [length(Locations)]),
+    NumJunctions = length([L || L <- Locations, L#location.type == junction]),
+    io:format("~n=== Static Map Loading Complete (FINAL LOGIC) ===~n"),
+    io:format("Total Locations (Nodes): ~p~n", [length(Locations)]),
     io:format("  - Homes: ~p~n", [NumHomes]),
-    io:format("    * North: ~p~n", [NorthHomes]),
-    io:format("    * Center: ~p~n", [CenterHomes]),
-    io:format("    * South: ~p~n", [SouthHomes]),
     io:format("  - Businesses: ~p~n", [NumBusinesses]),
-    io:format("Total Roads in Graph: ~p~n", [length(Roads)]),
-    io:format("===================================~n~n").
+    io:format("  - Road Junctions: ~p~n", [NumJunctions]),
+    io:format("Total Directed Roads (Edges): ~p~n", [length(Roads)]),
+    io:format("==================================================~n~n").

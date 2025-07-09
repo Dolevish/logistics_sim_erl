@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, initialize_map/0]). % נשאר רק initialize_map/0
+-export([start_link/0, initialize_map/0]).
 -export([get_location/1, get_distance/2, get_zone_info/1]).
 -export([update_courier_position/2, get_courier_position/1, get_all_courier_positions/0]).
 -export([get_business_in_zone/1, get_random_home_in_zone/1]).
@@ -77,12 +77,11 @@ init([]) ->
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
     {ok, #state{}}.
 
-%% --- שינוי מרכזי: טעינת מפה סטטית ---
 handle_call(initialize_map, _From, State) ->
     io:format("Map Server: Initializing static map from file...~n"),
     case map_loader:load_map() of
         {ok, RawJsonForFrontend} ->
-            report_map_initialized(RawJsonForFrontend), % שלח את ה-JSON הגולמי ל-frontend
+            report_map_initialized(RawJsonForFrontend),
             {reply, {ok, map_initialized}, State#state{initialized = true}};
         {error, Reason} ->
             {reply, {error, Reason}, State}
@@ -102,7 +101,6 @@ handle_call({get_location, LocationId}, _From, State) ->
             end
     end;
 
-% ... (שאר פונקציות ה-handle_call נשארות ללא שינוי)
 handle_call({get_distance, FromId, ToId}, _From, State) ->
     case State#state.initialized of
         false -> {reply, {error, map_not_initialized}, State};
@@ -185,7 +183,11 @@ handle_call({get_route, FromId, ToId}, _From, State) ->
         true ->
             case dijkstra(FromId, ToId) of
                 {ok, Path} ->
-                    io:format("~p: Found route from ~p to ~p: ~p~n", [?MODULE, FromId, ToId, Path]),
+                    Weight = calculate_path_weight(Path),
+                    io:format("~n=== ROUTE CALCULATION ===~n", []),
+                    io:format("From: ~p~nTo:   ~p~n", [FromId, ToId]),
+                    io:format("CHOSEN PATH [~p nodes, weight=~p]: ~p~n", [length(Path), Weight, Path]),
+                    io:format("========================~n~n", []),
                     {reply, {ok, Path}, State};
                 {error, Reason} ->
                     io:format("~p: Failed to find route from ~p to ~p: ~p~n", [?MODULE, FromId, ToId, Reason]),
@@ -215,8 +217,28 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 %% -----------------------------------------------------------
-%% Private Helper Functions (unchanged from original)
+%% Private Helper Functions
 %% -----------------------------------------------------------
+calculate_path_weight([_]) -> 0;
+calculate_path_weight([Node1, Node2 | Rest]) ->
+    case get_segment_distance(Node1, Node2) of
+        {ok, Dist} ->
+            Dist + calculate_path_weight([Node2 | Rest]);
+        {error, _} ->
+            infinity
+    end;
+calculate_path_weight([]) -> 0.
+
+get_segment_distance(From, To) ->
+    case ets:lookup(map_graph, From) of
+        [{_, Neighbors}] ->
+            case lists:keyfind(To, 1, Neighbors) of
+                {To, Distance, _Time} -> {ok, Distance};
+                false -> {error, {segment_not_found, From, To}}
+            end;
+        [] -> {error, {node_not_found, From}}
+    end.
+
 calculate_direct_distance(FromId, ToId) ->
     case {ets:lookup(map_locations, FromId), ets:lookup(map_locations, ToId)} of
         {[{_, From}], [{_, To}]} ->
@@ -243,7 +265,6 @@ get_zone_statistics(Zone) ->
        home_ids => [H#location.id || H <- HomesInZone],
        business_ids => [B#location.id || B <- BusinessesInZone] }.
 
-%% --- שינוי: שליחת ה-JSON הגולמי במקום לבנות אותו מחדש ---
 report_map_initialized(RawJsonForFrontend) ->
     case whereis(logistics_state_collector) of
         undefined -> ok;
@@ -283,45 +304,61 @@ convert_to_binary(Value) when is_list(Value) -> list_to_binary(Value);
 convert_to_binary(Value) when is_binary(Value) -> Value;
 convert_to_binary(Value) -> list_to_binary(io_lib:format("~p", [Value])).
 
-%% --- מימוש של אלגוריתם דייקסטרה (ללא שינוי) ---
+%% -----------------------------------------------------------
+%% הערה חדשה: מימוש מתוקן של אלגוריתם דייקסטרה עם לוגים מפורטים
+%% -----------------------------------------------------------
 dijkstra(StartNode, EndNode) ->
     Nodes = [Id || {Id, _} <- ets:tab2list(map_locations)],
     Distances = maps:from_list([{Node, infinity} || Node <- Nodes]),
     DistancesWithStart = maps:put(StartNode, 0, Distances),
-    PriorityQueue = gb_sets:from_list(Nodes),
+    PriorityQueue = Nodes,
     Previous = maps:new(),
+    io:format("DIJKSTRA: Starting search from ~p to ~p...~n", [StartNode, EndNode]),
     case dijkstra_loop(EndNode, PriorityQueue, DistancesWithStart, Previous) of
         {ok, FinalPrev} -> {ok, reconstruct_path(EndNode, FinalPrev, [])};
         {error, Reason} -> {error, Reason}
     end.
+
 dijkstra_loop(EndNode, PQ, Distances, Previous) ->
     case find_closest_node(PQ, Distances) of
         {U, _Dist} when U == EndNode -> {ok, Previous};
         {_U, infinity} -> {error, no_path_found};
         {U, DistU} ->
-            NewPQ = gb_sets:delete(U, PQ),
+            io:format("DIJKSTRA: Visiting node ~p (distance: ~p)~n", [U, DistU]),
+            NewPQ = lists:delete(U, PQ),
             case ets:lookup(map_graph, U) of
                 [{_, Neighbors}] ->
+                    io:format("DIJKSTRA: Neighbors of ~p: ~p~n", [U, Neighbors]),
                     {NewDistances, NewPrevious} = lists:foldl(
                         fun({V, EdgeWeight, _}, {D, P}) ->
                             Alt = DistU + EdgeWeight,
                             CurrentDistV = maps:get(V, D),
-                            if Alt < CurrentDistV -> {maps:put(V, Alt, D), maps:put(V, U, P)};
+                            if Alt < CurrentDistV -> 
+                                   io:format("DIJKSTRA: Better path to ~p found! New weight: ~p~n", [V, Alt]),
+                                   {maps:put(V, Alt, D), maps:put(V, U, P)};
                                true -> {D, P}
                             end
                         end, {Distances, Previous}, Neighbors),
                     dijkstra_loop(EndNode, NewPQ, NewDistances, NewPrevious);
-                [] -> dijkstra_loop(EndNode, NewPQ, Distances, Previous)
+                [] -> 
+                    dijkstra_loop(EndNode, NewPQ, Distances, Previous)
             end;
-        none -> {error, no_path_found}
+        none -> {error, no_path_found_in_pq}
     end.
+
+%% @doc פונקציה למציאת הצומת הקרוב ביותר מתוך רשימה.
 find_closest_node(PQ, Distances) ->
-    gb_sets:fold(
-        fun(Node, Closest) ->
-            {_, ClosestDist} = Closest,
+    lists:foldl(
+        fun(Node, {ClosestNode, ClosestDist}) ->
             Dist = maps:get(Node, Distances),
-            if Dist < ClosestDist -> {Node, Dist}; true -> Closest end
-        end, {none, infinity}, PQ).
+            if Dist < ClosestDist -> {Node, Dist};
+               true -> {ClosestNode, ClosestDist}
+            end
+        end,
+        {none, infinity},
+        PQ
+    ).
+
 reconstruct_path(Current, Previous, Path) ->
     case maps:get(Current, Previous, undefined) of
         undefined -> [Current | Path];

@@ -35,9 +35,11 @@ websocket_handle({text, Msg}, State) ->
         #{<<"type">> := <<"request_simulation_state">>} ->
             send_current_simulation_state(),
             {ok, State};
-        #{<<"type">> := <<"request_full_state">>} ->
+        %% *** התיקון מתחיל כאן ***
+        #{<<"type">> := <<"command">>, <<"action">> := <<"request_full_state">>} ->
             send_full_state_to_client(),
             {ok, State};
+        %% *** התיקון מסתיים כאן ***
         #{<<"type">> := <<"command">>, <<"action">> := Action} = Cmd ->
             handle_client_command(Action, Cmd),
             {ok, State};

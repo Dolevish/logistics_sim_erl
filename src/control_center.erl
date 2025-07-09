@@ -155,12 +155,12 @@ running(cast, {pause_simulation}, State) ->
 
 running(cast, {pause_order_generator}, State) ->
     io:format("Order generator paused by operator~n"),
-    pause_all_order_generators(State),
+    pause_all_order_generators(),
     {keep_state, State};
 
 running(cast, {continue_order_generator}, State) ->
     io:format("Order generator continued by operator~n"),
-    resume_all_order_generators(State),
+    resume_all_order_generators(),
     {keep_state, State};
 
 running(cast, {update_order_interval, Interval}, State) ->
@@ -513,19 +513,21 @@ check_zones_health(_State) ->
 %% טיפול בכשל של אזור
 handle_zone_failure(Zone) -> io:format("Handling failure of zone: ~p~n", [Zone]).
 
+%% *** התיקון מתחיל כאן: הסרת הפרמטר שאינו בשימוש ***
 %% השהיית כל מחוללי ההזמנות
-pause_all_order_generators(State) ->
+pause_all_order_generators() ->
     case whereis(random_order_generator) of
         undefined -> ok;
         _ -> random_order_generator:pause()
     end.
 
 %% המשך כל מחוללי ההזמנות
-resume_all_order_generators(State) ->
+resume_all_order_generators() ->
     case whereis(random_order_generator) of
         undefined -> ok;
         _ -> random_order_generator:resume()
     end.
+%% *** התיקון מסתיים כאן ***
 
 %% עדכון אינטרוול במחולל ההזמנות
 update_order_interval_in_generator(Interval) ->
@@ -555,7 +557,7 @@ resume_all_couriers(State) ->
 
 %% פונקציות מאוחדות להשהיה והמשך
 pause_all_components(State) ->
-    pause_all_order_generators(State),
+    pause_all_order_generators(),
     pause_all_couriers(State),
     case whereis(location_tracker) of
         undefined -> ok;
@@ -563,7 +565,7 @@ pause_all_components(State) ->
     end.
 
 resume_all_components(State) ->
-    resume_all_order_generators(State),
+    resume_all_order_generators(),
     resume_all_couriers(State),
     case whereis(location_tracker) of
         undefined -> ok;
