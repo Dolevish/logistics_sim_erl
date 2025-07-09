@@ -313,7 +313,7 @@ dijkstra(StartNode, EndNode) ->
     DistancesWithStart = maps:put(StartNode, 0, Distances),
     PriorityQueue = Nodes,
     Previous = maps:new(),
-    io:format("DIJKSTRA: Starting search from ~p to ~p...~n", [StartNode, EndNode]),
+   % io:format("DIJKSTRA: Starting search from ~p to ~p...~n", [StartNode, EndNode]),
     case dijkstra_loop(EndNode, PriorityQueue, DistancesWithStart, Previous) of
         {ok, FinalPrev} -> {ok, reconstruct_path(EndNode, FinalPrev, [])};
         {error, Reason} -> {error, Reason}
@@ -324,17 +324,17 @@ dijkstra_loop(EndNode, PQ, Distances, Previous) ->
         {U, _Dist} when U == EndNode -> {ok, Previous};
         {_U, infinity} -> {error, no_path_found};
         {U, DistU} ->
-            io:format("DIJKSTRA: Visiting node ~p (distance: ~p)~n", [U, DistU]),
+           % io:format("DIJKSTRA: Visiting node ~p (distance: ~p)~n", [U, DistU]),
             NewPQ = lists:delete(U, PQ),
             case ets:lookup(map_graph, U) of
                 [{_, Neighbors}] ->
-                    io:format("DIJKSTRA: Neighbors of ~p: ~p~n", [U, Neighbors]),
+                    %io:format("DIJKSTRA: Neighbors of ~p: ~p~n", [U, Neighbors]),
                     {NewDistances, NewPrevious} = lists:foldl(
                         fun({V, EdgeWeight, _}, {D, P}) ->
                             Alt = DistU + EdgeWeight,
                             CurrentDistV = maps:get(V, D),
                             if Alt < CurrentDistV -> 
-                                   io:format("DIJKSTRA: Better path to ~p found! New weight: ~p~n", [V, Alt]),
+                                   %io:format("DIJKSTRA: Better path to ~p found! New weight: ~p~n", [V, Alt]),
                                    {maps:put(V, Alt, D), maps:put(V, U, P)};
                                true -> {D, P}
                             end

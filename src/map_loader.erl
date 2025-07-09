@@ -75,7 +75,9 @@ create_all_locations(JsonRoads, NamedLocations) ->
         sets:add_element({round(maps:get(<<"x2">>, Road)), round(maps:get(<<"y2">>, Road))}, Acc))
     end, sets:new(), JsonRoads),
 
-    JunctionCoords = sets:subtract(AllRoadEndpoints, NamedCoords),
+        IntersectionCoords = find_intersections(JsonRoads),
+    AllJunctions = sets:union(AllRoadEndpoints, IntersectionCoords),
+    JunctionCoords = sets:subtract(AllJunctions, NamedCoords),
     {Junctions, _} = lists:mapfoldl(
         fun({X, Y}, Index) ->
             Id = "junction_" ++ integer_to_list(Index),
@@ -190,6 +192,45 @@ group_by(Fun, List) ->
         #{},
         List
     ).
+%% @doc מחשב את כל נקודות החיתוך בין קטעי כביש ומחזיר אותן כ-Set.
+find_intersections(JsonRoads) ->
+    Roads = [ {round(maps:get(<<"x1">>, R)), round(maps:get(<<"y1">>, R)),
+               round(maps:get(<<"x2">>, R)), round(maps:get(<<"y2">>, R))}
+             || R <- JsonRoads ],
+    find_intersections(Roads, [], sets:new()).
+
+find_intersections([R | Rest], Processed, Acc) ->
+    NewAcc = lists:foldl(fun(R2, A) ->
+        case line_intersection(R, R2) of
+            none -> A;
+            {X, Y} -> sets:add_element({X, Y}, A)
+        end
+    end, Acc, Processed),
+    find_intersections(Rest, [R | Processed], NewAcc);
+find_intersections([], _Processed, Acc) ->
+    Acc.
+
+%% @doc בודק האם שני קטעים נחתכים ומחזיר את נקודת החיתוך העגולה.
+line_intersection({X1,Y1,X2,Y2}, {X3,Y3,X4,Y4}) ->
+    Den = (X1 - X2)*(Y3 - Y4) - (Y1 - Y2)*(X3 - X4),
+    case Den of
+        0 -> none; % מקבילים
+        _ ->
+            Px = ((X1*Y2 - Y1*X2)*(X3 - X4) - (X1 - X2)*(X3*Y4 - Y3*X4)) / Den,
+            Py = ((X1*Y2 - Y1*X2)*(Y3 - Y4) - (Y1 - Y2)*(X3*Y4 - Y3*X4)) / Den,
+            MinX1 = erlang:min(X1, X2), MaxX1 = erlang:max(X1, X2),
+            MinX2 = erlang:min(X3, X4), MaxX2 = erlang:max(X3, X4),
+            MinY1 = erlang:min(Y1, Y2), MaxY1 = erlang:max(Y1, Y2),
+            MinY2 = erlang:min(Y3, Y4), MaxY2 = erlang:max(Y3, Y4),
+            if
+                Px >= MinX1 andalso Px =< MaxX1 andalso
+                Px >= MinX2 andalso Px =< MaxX2 andalso
+                Py >= MinY1 andalso Py =< MaxY1 andalso
+                Py >= MinY2 andalso Py =< MaxY2 ->
+                    {round(Px), round(Py)};
+                true -> none
+            end
+    end.
 
 %% -----------------------------------------------------------
 %% הדפסת סטטיסטיקות
