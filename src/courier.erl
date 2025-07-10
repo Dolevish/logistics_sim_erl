@@ -46,8 +46,13 @@ init([CourierId]) ->
     %% אתחול מחולל המספרים הרנדומליים
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
 
-    %% דיווח למערכת הניטור על אתחול השליח - עם דיליי קטן
-    erlang:send_after(100, self(), {report_initial_state}),
+    %% @@ הערה בעברית: התיקון - דיווח מיידי על המצב הראשוני @@
+    %% @@ במקום לשלוח הודעה מושהית לעצמו, אנו קוראים ישירות לפונקציית הדיווח. @@
+    %% @@ זה מבטיח שהמצב "idle" מדווח לפני כל מצב אחר שיכול להגיע. @@
+    report_state_change(CourierId, idle, #{
+        delivered_packages => [],
+        total_delivered => 0
+    }),
 
     %% הגדרת מיקום התחלתי אקראי לשליח כדי למנוע תקיעות במשימה הראשונה.
     %% קוראים לשרת המפה כדי לקבל נקודה אקראית על המפה.
@@ -107,26 +112,26 @@ handle_event(cast, {assign_delivery, PackageId, FromZone}, idle, Data) ->
         false ->
             CourierId = maps:get(id, Data),
             io:format("Courier(~p) received new assignment: package ~p from zone ~p~n", [CourierId, PackageId, FromZone]),
-            
+
             CurrentLocation = maps:get(current_location, Data),
             case get_package_locations(PackageId, FromZone) of
                 {ok, BusinessLocation, HomeLocation} ->
                     package:update_status(PackageId, picking_up),
-                    
+
                     CourierPid = self(),
                     StartCallback = fun() -> CourierPid ! pickup_complete end,
 
                     case location_tracker:start_tracking(CourierId, CurrentLocation, BusinessLocation, StartCallback) of
                         {ok, EstimatedTime} ->
-                            io:format("Courier(~p) will arrive at restaurant for package ~p in ~p seconds~n", 
+                            io:format("Courier(~p) will arrive at restaurant for package ~p in ~p seconds~n",
                                     [CourierId, PackageId, round(EstimatedTime)]),
-                            
+
                             report_state_change(CourierId, picking_up, #{
-                                package => PackageId, 
+                                package => PackageId,
                                 eta => round(EstimatedTime * 1000),
                                 destination => BusinessLocation
                             }),
-                            
+
                             {next_state, picking_up, Data#{
                                 package => PackageId,
                                 zone => FromZone,
@@ -162,31 +167,31 @@ handle_event(info, pickup_complete, picking_up, Data) ->
         false ->
             CourierId = maps:get(id, Data),
             PackageId = maps:get(package, Data),
-            
+
             io:format("Courier(~p) arrived at restaurant, picking up package ~p!~n", [CourierId, PackageId]),
             package:update_status(PackageId, in_transit),
-            
+
             BusinessLocation = maps:get(business_location, Data),
             HomeLocation = maps:get(home_location, Data),
-            
+
             location_tracker:stop_tracking(CourierId),
-            
+
             CourierPid = self(),
             DeliveryCallback = fun() -> CourierPid ! delivery_complete end,
 
             case location_tracker:start_tracking(CourierId, BusinessLocation, HomeLocation, DeliveryCallback) of
                 {ok, EstimatedTime} ->
-                    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p seconds~n", 
+                    io:format("Courier(~p) heading to customer with package ~p, ETA: ~p seconds~n",
                             [CourierId, PackageId, round(EstimatedTime)]),
-                    
+
                     Zone = maps:get(zone, Data, "unknown"),
                     report_state_change(CourierId, delivering, #{
-                        package => PackageId, 
-                        zone => Zone, 
+                        package => PackageId,
+                        zone => Zone,
                         eta => round(EstimatedTime * 1000),
                         destination => HomeLocation
                     }),
-                    
+
                     {next_state, delivering, Data#{current_location => BusinessLocation}};
                 Error ->
                     io:format("Courier(~p) failed to start delivery tracking: ~p~n", [CourierId, Error]),
@@ -204,10 +209,10 @@ handle_event(info, delivery_complete, delivering, Data) ->
             CourierId = maps:get(id, Data),
             PackageId = maps:get(package, Data),
             HomeLocation = maps:get(home_location, Data, undefined),
-            
+
             io:format("Courier(~p) delivered package ~p, now available for next delivery!~n", [CourierId, PackageId]),
             package:update_status(PackageId, delivered),
-            
+
             location_tracker:stop_tracking(CourierId),
 
             DeliveredPackages = maps:get(delivered_packages, Data),
@@ -239,19 +244,13 @@ handle_event(EventType, Event, moving_zone, Data) ->
     io:format("Courier(~p) moving_zone: ~p (~p)~n", [maps:get(id, Data), Event, EventType]),
     {keep_state, Data};
 
-handle_event(EventType, Event, idle, Data) ->
-    case {EventType, Event} of
-        {info, {report_initial_state}} ->
-            CourierId = maps:get(id, Data),
-            report_state_change(CourierId, idle, #{
-                delivered_packages => maps:get(delivered_packages, Data),
-                total_delivered => maps:get(total_delivered, Data)
-            });
-        {info, _} ->
-            io:format("Courier(~p) idle at delivery location, waiting for next assignment...~n", [maps:get(id, Data)]);
-        _ ->
-            ok
-    end,
+%% @@ הערה בעברית: הקוד שטיפל ב-report_initial_state נמחק, @@
+%% @@ מכיוון שהדיווח מתבצע כעת באופן מיידי בפונקציית init. @@
+handle_event(cast, _, idle, Data) ->
+    {keep_state, Data};
+
+handle_event(info, _, idle, Data) ->
+    io:format("Courier(~p) idle at delivery location, waiting for next assignment...~n", [maps:get(id, Data)]),
     {keep_state, Data};
 
 handle_event(EventType, Event, StateName, Data) ->

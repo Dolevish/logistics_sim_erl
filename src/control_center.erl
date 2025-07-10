@@ -81,7 +81,7 @@ init([]) ->
 %% מצב idle - ממתין להגדרות והפעלת סימולציה
 idle({call, From}, {start_simulation, Config}, State) ->
     io:format("Starting simulation with config: ~p~n", [Config]),
-    
+
     %% הערה חדשה: שינוי מרכזי - במקום לייצר מפה דינמית,
     %% אנו קוראים ל-map_server שיטען את המפה הסטטית מהקובץ.
     case map_server:initialize_map() of
@@ -469,6 +469,8 @@ stop_all_simulation_components(State) ->
             supervisor:terminate_child(logistics_sim_sup, simulation_supervisor),
             supervisor:delete_child(logistics_sim_sup, simulation_supervisor)
     end,
+    %% @@ הערה בעברית: הקריאה החדשה שמנקה את מצב מעקב המיקומים ומונעת "שליחי רפאים". @@
+    location_tracker:clear_all_trackings(),
     clear_ets_tables().
 
 %% ניקוי טבלאות ETS

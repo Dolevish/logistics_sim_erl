@@ -12,6 +12,8 @@
 -export([update_all_positions/0]).
 %% >> הערה חדשה: הוספת פונקציות API חדשות להשהיה והמשך <<
 -export([pause/0, resume/0]).
+%% @@ הוספת API חדש לניקוי המעקבים @@
+-export([clear_all_trackings/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -62,6 +64,10 @@ pause() ->
 
 resume() ->
     gen_server:cast(?MODULE, resume).
+
+%% @@ הערה בעברית: פונקציית API חדשה המאפשרת למרכז הבקרה לנקות את כל המעקבים הפעילים. @@
+clear_all_trackings() ->
+    gen_server:cast(?MODULE, clear_all).
 
 %% התחלת מעקב אחר שליח
 %% CourierId - מזהה השליח
@@ -159,6 +165,12 @@ handle_cast(pause, State) ->
 handle_cast(resume, State) ->
     io:format("Location Tracker: Resuming updates.~n"),
     {noreply, State#state{paused = false}};
+
+%% @@ הערה בעברית: טיפול בקריאת ה-API החדשה לאיפוס המעקבים. @@
+%% @@ הוא פשוט מחליף את מפת המעקבים במפה ריקה. @@
+handle_cast(clear_all, State) ->
+    io:format("Location Tracker: Clearing all active trackings.~n"),
+    {noreply, State#state{active_trackings = #{}}};
 
 %% הפסקת מעקב
 handle_cast({stop_tracking, CourierId}, State) ->
