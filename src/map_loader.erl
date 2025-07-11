@@ -3,14 +3,17 @@
 %% מבטיח יצירת גרף דו-כיווני מלא ומסלולים אופטימליים.
 %% -----------------------------------------------------------
 -module(map_loader).
--export([load_map/0]).
+-export([load_map/0, load_map/1]).
 
 -include("map_records.hrl").
 
 %% @doc פונקציה ראשית לטעינת המפה.
 load_map() ->
-    io:format("Loading static map and DECONSTRUCTING roads from JSON...~n"),
-    case load_and_parse_json_map() of
+    load_map(100).
+
+load_map(MapSize) ->
+    io:format("Loading static map (~p homes) and DECONSTRUCTING roads from JSON...~n", [MapSize]),
+    case load_and_parse_json_map(MapSize) of
         {ok, {Locations, Roads, RawJsonForFrontend}} ->
             save_map_to_ets(Locations, Roads),
             print_map_statistics(Locations, Roads),
@@ -21,10 +24,14 @@ load_map() ->
     end.
 
 %% @doc פונקציית על: קוראת את קובץ ה-JSON ומעבדת אותו במלואו.
-load_and_parse_json_map() ->
+load_and_parse_json_map(MapSize) ->
     try
         PrivDir = code:priv_dir(logistics_sim),
-        FilePath = filename:join([PrivDir, "static", "map_data.json"]),
+        FileName = case MapSize of
+            200 -> "map_data 200.json";
+            _ -> "map_data.json"
+        end,
+        FilePath = filename:join([PrivDir, "static", FileName]),
         {ok, BinaryData} = file:read_file(FilePath),
         JsonData = jsx:decode(BinaryData, [return_maps]),
         Elements = maps:get(<<"elements">>, JsonData),

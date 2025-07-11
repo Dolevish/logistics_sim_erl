@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, initialize_map/0]).
+-export([start_link/0, initialize_map/1]).
 -export([get_location/1, get_distance/2, get_zone_info/1]).
 -export([update_courier_position/2, get_courier_position/1, get_all_courier_positions/0]).
 -export([get_business_in_zone/1, get_random_home_in_zone/1]).
@@ -28,8 +28,8 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-initialize_map() ->
-    gen_server:call(?MODULE, initialize_map).
+initialize_map(MapSize) ->
+    gen_server:call(?MODULE, {initialize_map, MapSize}).
 
 get_location(LocationId) ->
     gen_server:call(?MODULE, {get_location, LocationId}).
@@ -77,9 +77,9 @@ init([]) ->
     rand:seed(exsplus, {erlang:phash2([node()]), erlang:monotonic_time(), erlang:unique_integer()}),
     {ok, #state{}}.
 
-handle_call(initialize_map, _From, State) ->
-    io:format("Map Server: Initializing static map from file...~n"),
-    case map_loader:load_map() of
+handle_call({initialize_map, MapSize}, _From, State) ->
+    io:format("Map Server: Initializing static map from file (size ~p)...~n", [MapSize]),
+    case map_loader:load_map(MapSize) of
         {ok, RawJsonForFrontend} ->
             report_map_initialized(RawJsonForFrontend),
             {reply, {ok, map_initialized}, State#state{initialized = true}};

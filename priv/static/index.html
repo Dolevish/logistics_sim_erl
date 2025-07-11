@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Logistics Simulator - Fixed Map</title>
+    <title>Logistics Simulator - Configurable Map</title>
     <link rel="stylesheet" href="style.css">
 </head><body>
     <div class="container">
@@ -43,7 +43,7 @@
                 <form id="configForm" class="config-form">
                     <div class="zones-info">
                         <h3>Delivery Zones & Map</h3>
-                        <p>The simulation operates with a fixed map of <strong>100 homes</strong> and 3 businesses, divided into 3 zones: North, Center, and South.</p>
+                        <p>The simulation operates with a map of <strong>100 or 200 homes</strong> and 3 businesses, divided into 3 zones: North, Center, and South.</p>
                     </div>
                     <div class="form-group">
                         <label for="numCouriers">Number of Couriers:</label>
@@ -54,6 +54,14 @@
                         <label for="orderInterval">Order Generation Interval (seconds):</label>
                         <input type="number" id="orderInterval" name="orderInterval" min="1" max="300" value="5" required>
                         <small>Time between new orders (1-300 seconds).</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="mapSize">Map Size:</label>
+                        <select id="mapSize" name="mapSize">
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                        <small>Number of homes to load (100 or 200).</small>
                     </div>
                 </form>
                  <div class="config-info">
@@ -101,7 +109,7 @@
                 <div class="zones-container" id="zonesContainer"></div>
             </div>
             <div id="configFooter" class="config-footer">
-                <p>Logistics Simulator v3.2 - Fixed Map Edition</p>
+                <p>Logistics Simulator v3.2 - Configurable Map Edition</p>
             </div>
         </footer>
     </div>

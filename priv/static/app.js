@@ -1,4 +1,4 @@
-// Enhanced Logistics Simulator Dashboard with Fixed Map Support
+// Enhanced Logistics Simulator Dashboard with Configurable Map Support
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- הערה: הגדרת משתנים גלובליים לאפליקציה ---
@@ -55,7 +55,8 @@ document.addEventListener('DOMContentLoaded', () => {
         zonesStatus: document.getElementById('zonesStatus'),
         configFooter: document.getElementById('configFooter'),
         zonesContainer: document.getElementById('zonesContainer'),
-        mapCanvas: document.getElementById('mapCanvas')
+        mapCanvas: document.getElementById('mapCanvas'),
+        mapSizeSelect: document.getElementById('mapSize')
     };
 
     // --- הערה: מחלקת הוויזואליזציה של המפה ---
@@ -255,7 +256,19 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (e) { console.error('State update error:', e, "data:", data); }
     };
-    const startSimulation = () => { const config = { num_couriers: parseInt(elements.numCouriersInput.value), order_interval: parseInt(elements.orderIntervalInput.value) * 1000 }; if (!mapVisualization) { mapVisualization = new MapVisualization(elements.mapCanvas); } sendCommand('start_simulation', config); elements.startSimBtn.disabled = true; elements.startSimBtn.textContent = 'Starting...'; };
+    const startSimulation = () => {
+        const config = {
+            num_couriers: parseInt(elements.numCouriersInput.value),
+            order_interval: parseInt(elements.orderIntervalInput.value) * 1000,
+            map_size: parseInt(elements.mapSizeSelect.value)
+        };
+        if (!mapVisualization) {
+            mapVisualization = new MapVisualization(elements.mapCanvas);
+        }
+        sendCommand('start_simulation', config);
+        elements.startSimBtn.disabled = true;
+        elements.startSimBtn.textContent = 'Starting...';
+    };
     const resetSimulation = () => { if (confirm('Are you sure you want to reset the simulation?')) { sendCommand('stop_simulation'); } };
     const pauseSimulation = () => sendCommand('pause_simulation');
     const continueSimulation = () => sendCommand('continue_simulation');
@@ -292,7 +305,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const generateZonePanels = () => { elements.zonesContainer.innerHTML = ''; FIXED_ZONES.forEach(zone => { const zoneDiv = document.createElement('div'); zoneDiv.className = 'zone-item'; zoneDiv.setAttribute('data-zone', zone); zoneDiv.innerHTML = `<h4>${zone.charAt(0).toUpperCase() + zone.slice(1)} Zone</h4><div class="zone-stats"><span>Total: <span class="zone-total">0</span></span><span>Waiting: <span class="zone-waiting">0</span></span><span>Active: <span class="zone-active">0</span></span><span>Delivered: <span class="zone-delivered">0</span></span></div>`; elements.zonesContainer.appendChild(zoneDiv); }); };
     const updateZoneDisplay = (zone) => { const zoneEl = document.querySelector(`[data-zone="${zone.zone}"]`); if (zoneEl) { zoneEl.querySelector('.zone-waiting').textContent = zone.waiting_packages || 0; zoneEl.querySelector('.zone-active').textContent = zone.active_deliveries || 0; zoneEl.querySelector('.zone-delivered').textContent = zone.total_delivered || 0; zoneEl.querySelector('.zone-total').textContent = zone.total_orders || 0; } };
     const formatETA = (eta) => { if (!eta || eta <= 0) return 'N/A'; const totalSeconds = Math.floor(eta / 1000); const minutes = Math.floor(totalSeconds / 60); const seconds = totalSeconds % 60; return `${minutes}m ${seconds.toString().padStart(2, '0')}s`; };
-    const validateFormInputs = () => { const numCouriers = parseInt(elements.numCouriersInput.value, 10); const orderInterval = parseInt(elements.orderIntervalInput.value, 10); elements.startSimBtn.disabled = !(numCouriers > 0 && numCouriers <= 200 && orderInterval > 0 && orderInterval <= 300); };
+    const validateFormInputs = () => {
+        const numCouriers = parseInt(elements.numCouriersInput.value, 10);
+        const orderInterval = parseInt(elements.orderIntervalInput.value, 10);
+        const mapSize = parseInt(elements.mapSizeSelect.value, 10);
+        const validMap = mapSize === 100 || mapSize === 200;
+        elements.startSimBtn.disabled = !(
+            numCouriers > 0 && numCouriers <= 200 &&
+            orderInterval > 0 && orderInterval <= 300 &&
+            validMap
+        );
+    };
 
     // --- הערה: אתחול האפליקציה ---
     const init = () => {

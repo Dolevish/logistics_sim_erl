@@ -14,8 +14,7 @@
 
 %% הגדרת האזורים הקבועים
 -define(FIXED_ZONES, ["north", "center", "south"]).
-%% הערה חדשה: הגדרת מספר הבתים כקבוע במערכת
--define(FIXED_NUM_HOMES, 100).
+
 
 %% -----------------------------------------------------------
 %% API Functions - פונקציות ציבוריות לשליטה במרכז הבקרה
@@ -82,14 +81,14 @@ init([]) ->
 idle({call, From}, {start_simulation, Config}, State) ->
     io:format("Starting simulation with config: ~p~n", [Config]),
 
-    %% הערה חדשה: שינוי מרכזי - במקום לייצר מפה דינמית,
-    %% אנו קוראים ל-map_server שיטען את המפה הסטטית מהקובץ.
-    case map_server:initialize_map() of
+    %% הערה חדשה: שינוי מרכזי - טעינת מפה סטטית בהתאם לגודל שנבחר.
+    MapSize = maps:get(map_size, Config, 100),
+    case map_server:initialize_map(MapSize) of
         {ok, map_initialized} ->
-            %% הערה חדשה: בונים את הגדרות הסימולציה הסופיות עם הערכים הקבועים
+            %% הערה חדשה: בונים את הגדרות הסימולציה הסופיות עם הגודל שבחר המשתמש
             FinalConfig = Config#{
                 map_enabled => true,
-                num_homes => ?FIXED_NUM_HOMES
+                num_homes => MapSize
             },
             start_simulation_components_and_transition(From, FinalConfig, State);
         {error, Reason} ->
@@ -377,13 +376,14 @@ start_simulation_components(SupPid, Config) ->
             undefined -> ets:new(simulation_config, [named_table, public, {keypos, 1}]);
             _ -> ok
         end,
+        MapSize = maps:get(num_homes, Config, 100),
         ets:insert(simulation_config, {num_couriers, NumCouriers}),
-        ets:insert(simulation_config, {num_homes, ?FIXED_NUM_HOMES}),
+        ets:insert(simulation_config, {num_homes, MapSize}),
         ets:insert(simulation_config, {order_interval, OrderInterval}),
         ets:insert(simulation_config, {zones, ?FIXED_ZONES}),
         ets:insert(simulation_config, {map_enabled, MapEnabled}),
         io:format("Saved configuration with fixed zones: ~p~n", [?FIXED_ZONES]),
-        io:format("Map enabled: ~p, Homes: ~p~n", [MapEnabled, ?FIXED_NUM_HOMES]),
+        io:format("Map enabled: ~p, Homes: ~p~n", [MapEnabled, MapSize]),
         start_courier_pool(SupPid),
         lists:foreach(fun(Zone) -> start_zone_manager(SupPid, Zone) end, ?FIXED_ZONES),
         start_couriers(SupPid, NumCouriers),

@@ -113,7 +113,12 @@ handle_client_command(Action, _Cmd) ->
 
 %% הערה: חילוץ הגדרות מהפקודה שנשלחה מהלקוח.
 extract_config_from_command(Cmd) ->
-    DefaultConfig = #{ num_couriers => 8, order_interval => 5000 },
+    DefaultConfig = #{ num_couriers => 8, order_interval => 5000, map_size => 100 },
     NumCouriers = maps:get(<<"num_couriers">>, Cmd, maps:get(num_couriers, DefaultConfig)),
     OrderInterval = maps:get(<<"order_interval">>, Cmd, maps:get(order_interval, DefaultConfig)),
-    #{ zones => ?FIXED_ZONES, num_couriers => NumCouriers, order_interval => OrderInterval, enable_map => true }.
+    MapSize = maps:get(<<"map_size">>, Cmd, maps:get(map_size, DefaultConfig)),
+    #{ zones => ?FIXED_ZONES,
+       num_couriers => NumCouriers,
+       order_interval => OrderInterval,
+       map_size => MapSize,
+       enable_map => true }.
