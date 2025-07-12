@@ -17,7 +17,8 @@
 %% יצירת Zone Manager עבור אזור בשם zone_name (string)
 %% -----------------------------------------------------------
 start_link(ZoneName) ->
-    gen_statem:start_link({local, list_to_atom("zone_manager_" ++ ZoneName)}, ?MODULE, [ZoneName], []).
+    Name = list_to_atom("zone_manager_" ++ ZoneName),
+    gen_statem:start_link({via, global, Name}, ?MODULE, [ZoneName], []).
 
 %% תיקון: שינוי ל-handle_event mode
 callback_mode() -> handle_event_function.

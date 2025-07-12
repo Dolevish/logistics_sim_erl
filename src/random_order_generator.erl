@@ -16,7 +16,7 @@
 %% start_link/0 - מתחיל תהליך מחולל רנדומלי יחיד
 %% -----------------------------------------------------------
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({via, global, ?MODULE}, ?MODULE, [], []).
 
 init([]) ->
     io:format("Random Order Generator started with fixed zones: ~p~n", [?FIXED_ZONES]),

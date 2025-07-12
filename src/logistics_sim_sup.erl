@@ -10,7 +10,7 @@
 
 %% התחלת הסופרווייזר
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+    supervisor:start_link({via, global, ?MODULE}, ?MODULE, []).
 
 %% אתחול הסופרווייזר והגדרת תהליכי התשתית
 init([]) ->
@@ -18,6 +18,14 @@ init([]) ->
     
     %% ChildSpecs – רשימת תהליכי התשתית כולל מודולי המפה
     ChildSpecs = [
+        %% Node Manager - monitors cluster nodes
+        #{id => node_manager,
+          start => {node_manager, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [node_manager]},
+
         %% Map Server - חייב להיות ראשון כי אחרים תלויים בו
         #{id => map_server,
           start => {map_server, start_link, []},

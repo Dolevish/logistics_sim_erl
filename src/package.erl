@@ -15,7 +15,8 @@
 
 %% >> תיקון 2: שינוי בחתימת הפונקציה <<
 start_link(PkgId, Zone) ->
-    gen_statem:start_link({local, list_to_atom("package_" ++ PkgId)}, ?MODULE, [PkgId, Zone], []).
+    Name = list_to_atom("package_" ++ PkgId),
+    gen_statem:start_link({via, global, Name}, ?MODULE, [PkgId, Zone], []).
 
 callback_mode() -> handle_event_function.
 

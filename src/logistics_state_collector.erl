@@ -23,7 +23,7 @@
 %% -----------------------------------------------------------
 
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({via, global, ?MODULE}, ?MODULE, [], []).
 
 subscribe(HandlerPid) ->
     gen_server:cast(?MODULE, {subscribe, HandlerPid}).

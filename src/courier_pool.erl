@@ -20,7 +20,7 @@ start_link() ->
 
 %% התחלת מנהל התור עם מספר שליחים מותאם
 start_link(NumCouriers) when is_integer(NumCouriers), NumCouriers > 0 ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [NumCouriers], []).
+    gen_server:start_link({via, global, ?MODULE}, ?MODULE, [NumCouriers], []).
 
 %% בקשת שליח פנוי מהתור (עם ציון האזור המבקש)
 request_courier(ZoneName) ->

@@ -19,7 +19,7 @@
 
 %% התחלת שרת הווב
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({via, global, ?MODULE}, ?MODULE, [], []).
 
 %% עצירת שרת הווב
 stop() ->

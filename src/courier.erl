@@ -26,7 +26,8 @@
 %% יצירת שליח חדש (כולל שם דינמי לפי מזהה)
 %% -----------------------------------------------------------
 start_link(CourierId) ->
-    gen_statem:start_link({local, list_to_atom("courier_" ++ CourierId)}, ?MODULE, [CourierId], []).
+    Name = list_to_atom("courier_" ++ CourierId),
+    gen_statem:start_link({via, global, Name}, ?MODULE, [CourierId], []).
 
 % הוספת פונקציות API להשהיה והמשך
 pause(CourierId) ->

@@ -21,7 +21,7 @@
 %% -----------------------------------------------------------
 
 start_link() ->
-    gen_statem:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_statem:start_link({via, global, ?MODULE}, ?MODULE, [], []).
 
 callback_mode() ->
     state_functions.
