@@ -309,7 +309,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const numCouriers = parseInt(elements.numCouriersInput.value, 10);
         const orderInterval = parseInt(elements.orderIntervalInput.value, 10);
         const mapSize = parseInt(elements.mapSizeSelect.value, 10);
-        const validMap = mapSize === 100 || mapSize === 200;
+        const validMap = mapSize === 100 || mapSize === 200 || mapSize === 1043;
         elements.startSimBtn.disabled = !(
             numCouriers > 0 && numCouriers <= 200 &&
             orderInterval > 0 && orderInterval <= 300 &&
