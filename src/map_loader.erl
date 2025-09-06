@@ -28,6 +28,7 @@ load_and_parse_json_map(MapSize) ->
     try
         PrivDir = code:priv_dir(logistics_sim),
         FileName = case MapSize of
+            1043 -> "map_data1043.json";
             200 -> "map_data 200.json";
             _ -> "map_data.json"
         end,
