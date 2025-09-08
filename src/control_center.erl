@@ -1,7 +1,7 @@
 %% -----------------------------------------------------------
 %% מודול מרכז הבקרה (Control Center) - FSM
 %% המוח של הסימולציה, מנהל את כל התהליכים והמעבר בין מצבים.
-%% -- גרסה מתוקנת עם תמיכה במפה סטטית וכל יכולות השליטה --
+%% -- גרסה מבוזרת עם תמיכה בנודים מרוחקים --
 %% -----------------------------------------------------------
 -module(control_center).
 -behaviour(gen_statem).
@@ -9,11 +9,53 @@
 -export([start_link/0, start_simulation/1, stop_simulation/0, get_status/0, emergency_stop/0]).
 % הוספת הפונקציות החדשות
 -export([pause_simulation/0, continue_simulation/0, pause_order_generator/0, continue_order_generator/0, update_order_interval/1]).
+% פונקציות לביזור
+-export([connect_to_all_nodes/0, get_zone_nodes/0, notify_zone_managers/2]).
 -export([callback_mode/0, init/1, terminate/3, code_change/4]).
 -export([idle/3, initializing/3, running/3, paused/3, degraded/3, recovering/3, shutting_down/3, halted/3]).
 
-%% הגדרת האזורים הקבועים
--define(FIXED_ZONES, ["north", "center", "south"]).
+%% הגדרת האזורים הקבועים - עכשיו מבוזרים
+-define(FIXED_ZONES, ["1", "2", "3", "4", "5", "6"]).
+
+%% -----------------------------------------------------------
+%% פונקציות לביזור וניהול נודים
+%% -----------------------------------------------------------
+
+%% התחברות לכל הנודים הנדרשים
+connect_to_all_nodes() ->
+    UINode = application:get_env(logistics_sim, ui_node, 'ui@localhost'),
+    ZoneNodes = application:get_env(logistics_sim, zone_nodes, 
+        ['zone1@192.168.64.3', 'zone2@192.168.64.3', 'zone3@192.168.64.3']),
+
+    AllNodes = [UINode | ZoneNodes],
+    io:format("Connecting to nodes: ~p~n", [AllNodes]),
+    
+    lists:foreach(fun(Node) ->
+        case net_kernel:connect_node(Node) of
+            true ->
+                io:format("Successfully connected to node: ~p~n", [Node]);
+            false ->
+                io:format("Failed to connect to node: ~p~n", [Node]),
+                timer:sleep(1000)  % המתן לפני ניסיון חוזר
+        end
+    end, AllNodes).
+
+%% קבלת רשימת נודי האזורים
+get_zone_nodes() ->
+    application:get_env(logistics_sim, zone_nodes, 
+        ['zone1@192.168.64.3', 'zone2@192.168.64.3', 'zone3@192.168.64.3']).
+
+%% שליחת הודעה לכל מנהלי האזורים
+notify_zone_managers(Message, Data) ->
+    ZoneNodes = get_zone_nodes(),
+    lists:foreach(fun(Node) ->
+        try
+            rpc:cast(Node, gen_server, cast, [logistics_zone_sup, {Message, Data}])
+        catch
+            _:_ ->
+                io:format("Failed to notify zone node: ~p~n", [Node])
+        end
+    end, ZoneNodes).
 
 
 %% -----------------------------------------------------------
@@ -64,13 +106,18 @@ emergency_stop() ->
 
 init([]) ->
     io:format("Control Center initializing in idle mode...~n"),
+    
+    %% התחברות לכל הנודים הנדרשים
+    timer:apply_after(2000, ?MODULE, connect_to_all_nodes, []),
+    
     {ok, idle, #{
         simulation_config => #{},
         simulation_sup => undefined,
         zones => ?FIXED_ZONES,
         healthy_zones => [],
         failed_zones => [],
-        start_time => undefined
+        start_time => undefined,
+        connected_nodes => []
     }}.
 
 %% -----------------------------------------------------------
@@ -366,81 +413,46 @@ start_simulation_supervisor() ->
             Error
     end.
 
-%% התחלת כל רכיבי הסימולציה
+%% התחלת כל רכיבי הסימולציה - גרסה מבוזרת
 start_simulation_components(SupPid, Config) ->
     try
         NumCouriers = maps:get(num_couriers, Config, 8),
         OrderInterval = maps:get(order_interval, Config, 5000),
         MapEnabled = maps:get(map_enabled, Config, false),
+        
+        %% יצירת טבלת תצורה
         case ets:info(simulation_config) of
             undefined -> ets:new(simulation_config, [named_table, public, {keypos, 1}]);
             _ -> ok
         end,
+        
         MapSize = maps:get(num_homes, Config, 100),
         ets:insert(simulation_config, {num_couriers, NumCouriers}),
         ets:insert(simulation_config, {num_homes, MapSize}),
         ets:insert(simulation_config, {order_interval, OrderInterval}),
         ets:insert(simulation_config, {zones, ?FIXED_ZONES}),
         ets:insert(simulation_config, {map_enabled, MapEnabled}),
-        io:format("Saved configuration with fixed zones: ~p~n", [?FIXED_ZONES]),
+        
+        io:format("Saved configuration with distributed zones: ~p~n", [?FIXED_ZONES]),
         io:format("Map enabled: ~p, Homes: ~p~n", [MapEnabled, MapSize]),
-        start_courier_pool(SupPid),
-        lists:foreach(fun(Zone) -> start_zone_manager(SupPid, Zone) end, ?FIXED_ZONES),
-        start_couriers(SupPid, NumCouriers),
+        
+        %% התחלת מחולל הזמנות (רק במרכז הבקרה)
         start_order_generator(SupPid, OrderInterval),
-        timer:sleep(1000),
+        
+        %% שליחת התצורה לנודי האזורים
+        notify_zone_managers(start_simulation, #{
+            num_couriers => NumCouriers div length(?FIXED_ZONES) + 1,
+            map_enabled => MapEnabled,
+            map_size => MapSize
+        }),
+        
+        timer:sleep(2000),  % המתנה לאתחול נודי האזורים
         ok
     catch
         Type:Error:Stacktrace ->
             io:format("Error starting simulation components: ~p:~p~nStacktrace: ~p", [Type, Error, Stacktrace]),
             {error, {Type, Error}}
     end.
-
-%% התחלת Courier Pool
-start_courier_pool(SupPid) ->
-    NumCouriers = case ets:lookup(simulation_config, num_couriers) of
-        [{num_couriers, N}] -> N;
-        [] -> 8
-    end,
-    ChildSpec = #{
-        id => sim_courier_pool,
-        start => {courier_pool, start_link, [NumCouriers]},
-        restart => permanent, shutdown => 5000, type => worker, modules => [courier_pool]
-    },
-    case supervisor:start_child(SupPid, ChildSpec) of
-        {ok, _} -> ok;
-        {error, {already_started, _}} -> ok;
-        Error -> throw({courier_pool_start_failed, Error})
-    end.
-
-%% התחלת Zone Manager
-start_zone_manager(SupPid, Zone) ->
-    ChildSpec = #{
-        id => list_to_atom("sim_zone_manager_" ++ Zone),
-        start => {zone_manager, start_link, [Zone]},
-        restart => permanent, shutdown => 5000, type => worker, modules => [zone_manager]
-    },
-    case supervisor:start_child(SupPid, ChildSpec) of
-        {ok, _} -> ok;
-        {error, {already_started, _}} -> ok;
-        Error -> throw({zone_manager_start_failed, Zone, Error})
-    end.
-
-%% התחלת שליחים
-start_couriers(SupPid, NumCouriers) ->
-    lists:foreach(fun(N) ->
-        CourierId = "courier" ++ integer_to_list(N),
-        ChildSpec = #{
-            id => list_to_atom("sim_" ++ CourierId),
-            start => {courier, start_link, [CourierId]},
-            restart => permanent, shutdown => 5000, type => worker, modules => [courier]
-        },
-        case supervisor:start_child(SupPid, ChildSpec) of
-            {ok, _} -> ok;
-            {error, {already_started, _}} -> ok;
-            Error -> io:format("Warning: Failed to start courier ~p: ~p~n", [CourierId, Error])
-        end
-    end, lists:seq(1, NumCouriers)).
 
 %% התחלת מחולל הזמנות
 start_order_generator(SupPid, OrderInterval) ->
@@ -499,18 +511,25 @@ report_simulation_state(State, Config) ->
         _ -> logistics_state_collector:simulation_state_changed(State, Config)
     end.
 
-%% בדיקה שכל האזורים מוכנים ופעילים
+%% בדיקה שכל האזורים מוכנים ופעילים - גרסה מבוזרת
 check_all_zones_ready(_State) ->
-    lists:all(fun(Zone) -> whereis(list_to_atom("zone_manager_" ++ Zone)) =/= undefined end, ?FIXED_ZONES).
-
-%% בדיקת בריאות האזורים
-check_zones_health(_State) ->
-    lists:filter(fun(Zone) ->
-        case whereis(list_to_atom("zone_manager_" ++ Zone)) of
-            undefined -> true;
-            Pid -> not is_process_alive(Pid)
+    ZoneNodes = get_zone_nodes(),
+    lists:all(fun(Node) ->
+        case rpc:call(Node, whereis, [logistics_zone_sup], 5000) of
+            Pid when is_pid(Pid) -> true;
+            _ -> false
         end
-    end, ?FIXED_ZONES).
+    end, ZoneNodes).
+
+%% בדיקת בריאות האזורים - גרסה מבוזרת
+check_zones_health(_State) ->
+    ZoneNodes = get_zone_nodes(),
+    lists:filter(fun(Node) ->
+        case rpc:call(Node, whereis, [logistics_zone_sup], 5000) of
+            Pid when is_pid(Pid) -> false;  % בריא
+            _ -> true  % כשל
+        end
+    end, ZoneNodes).
 
 %% טיפול בכשל של אזור
 handle_zone_failure(Zone) -> io:format("Handling failure of zone: ~p~n", [Zone]).

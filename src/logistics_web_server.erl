@@ -2,16 +2,27 @@
 %% מודול שרת ווב (Web Server)
 %% מפעיל שרת HTTP עם Cowboy ומטפל ב-WebSocket connections
 %% משמש כנקודת כניסה לממשק הגרפי של המערכת
+%% גרסה מבוזרת - מתחבר למרכז בקרה מרוחק
 %% -----------------------------------------------------------
 -module(logistics_web_server).
 -behaviour(gen_server).
 
 %% API
 -export([start_link/0, stop/0]).
+%% פונקציות לביזור
+-export([get_control_center_node/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% הגדרת פורט ברירת מחדל
 -define(DEFAULT_PORT, 8080).
+
+%% -----------------------------------------------------------
+%% פונקציות לביזור
+%% -----------------------------------------------------------
+
+%% קבלת נוד מרכז הבקרה
+get_control_center_node() ->
+    application:get_env(logistics_sim, control_node, 'control@192.168.64.3').
 
 %% -----------------------------------------------------------
 %% API Functions

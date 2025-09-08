@@ -1,7 +1,7 @@
 %% -----------------------------------------------------------
 %% מודול מנהל אזור (Zone Manager) - FSM
 %% אחראי על חלוקת משלוחים ושליחים באזור מסוים
-%% תיקון: שליחת ספירת חבילות נכונה לממשק
+%% גרסה מבוזרת - מתקשר עם מרכז בקרה מרוחק
 %% -----------------------------------------------------------
 
 -module(zone_manager).
@@ -9,9 +9,29 @@
 
 %% API - הוספתי exports לכל הפונקציות הציבוריות
 -export([start_link/1, new_package/2]).
+%% פונקציות לביזור
+-export([get_control_center_node/0, notify_control_center/2]).
 
 %% Callbacks - שינוי ל-handle_event mode
 -export([callback_mode/0, init/1, handle_event/4, terminate/3, code_change/4]).
+
+%% -----------------------------------------------------------
+%% פונקציות לביזור
+%% -----------------------------------------------------------
+
+%% קבלת נוד מרכז הבקרה
+get_control_center_node() ->
+    application:get_env(logistics_sim, control_node, 'control@192.168.64.3').
+
+%% שליחת הודעה למרכז הבקרה
+notify_control_center(Event, Data) ->
+    ControlNode = get_control_center_node(),
+    try
+        rpc:cast(ControlNode, gen_server, cast, [logistics_state_collector, {Event, Data}])
+    catch
+        _:_ ->
+            io:format("Failed to notify control center at ~p~n", [ControlNode])
+    end.
 
 %% -----------------------------------------------------------
 %% יצירת Zone Manager עבור אזור בשם zone_name (string)
@@ -264,21 +284,17 @@ handle_event(EventType, Event, StateName, Data) ->
 %% פונקציות עזר
 %% -----------------------------------------------------------
 report_zone_state(Zone, Data) ->
-    case whereis(logistics_state_collector) of
-        undefined ->
-            io:format("DEBUG: State Collector not available for zone ~p state update~n", [Zone]);
-        _ ->
-            %% >> התיקון הקריטי כאן <<
-            %% בניית מפת נתונים חדשה עם ספירות נכונות, במקום שליחת המצב הפנימי
-            StateData = #{
-                waiting_packages => length(maps:get(waiting_packages, Data, [])),
-                active_deliveries => maps:get(active_deliveries, Data, 0),
-                total_delivered => maps:get(total_deliveries, Data, 0),
-                failed_deliveries => maps:get(failed_deliveries, Data, 0),
-                total_orders => maps:get(total_orders, Data, 0)
-            },
-            logistics_state_collector:zone_state_changed(Zone, StateData)
-    end.
+    %% שליחת מצב האזור למרכז הבקרה המרוחק
+    StateData = #{
+        zone => Zone,
+        waiting_packages => maps:get(waiting_packages, Data, []),
+        waiting_count => length(maps:get(waiting_packages, Data, [])),
+        active_deliveries => maps:get(active_deliveries, Data, 0),
+        total_deliveries => maps:get(total_deliveries, Data, 0),
+        failed_deliveries => maps:get(failed_deliveries, Data, 0),
+        total_orders => maps:get(total_orders, Data, 0)
+    },
+    notify_control_center(zone_state_update, StateData).
 
 %% -----------------------------------------------------------
 %% דרישות gen_statem

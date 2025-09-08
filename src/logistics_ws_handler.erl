@@ -2,14 +2,24 @@
 %% מודול מטפל WebSocket משופר - תומך בהגדרות דינמיות ומפה
 %% מנהל את החיבורים והתקשורת עם הדפדפן
 %% שולח עדכונים בזמן אמת על מצב המערכת כולל מיקומי שליחים
-%% -- גרסה מתוקנת עם טיפול מלא בפקודות --
+%% גרסה מבוזרת - מתקשר עם מרכז בקרה מרוחק
 %% -----------------------------------------------------------
 -module(logistics_ws_handler).
 -behaviour(cowboy_websocket).
 
 -export([init/2, websocket_init/1, websocket_handle/2, websocket_info/2, terminate/3]).
+%% פונקציות לביזור
+-export([get_control_center_node/0]).
 
--define(FIXED_ZONES, ["north", "center", "south"]).
+-define(FIXED_ZONES, ["1", "2", "3", "4", "5", "6"]).
+
+%% -----------------------------------------------------------
+%% פונקציות לביזור
+%% -----------------------------------------------------------
+
+%% קבלת נוד מרכז הבקרה
+get_control_center_node() ->
+    application:get_env(logistics_sim, control_node, 'control@192.168.64.3').
 
 %% הערה: אתחול החיבור - מעבר לפרוטוקול WebSocket
 init(Req, State) ->
@@ -78,7 +88,8 @@ terminate(_Reason, _Req, _State) ->
 %% --- פונקציות עזר פרטיות ---
 
 send_current_simulation_state() ->
-    case control_center:get_status() of
+    ControlNode = get_control_center_node(),
+    case rpc:call(ControlNode, control_center, get_status, [], 5000) of
         {SimState, StateData} ->
             self() ! {simulation_state_update, SimState, maps:get(simulation_config, StateData, #{})};
         _ ->
@@ -86,28 +97,40 @@ send_current_simulation_state() ->
     end.
     
 send_full_state_to_client() ->
-    case logistics_state_collector:get_full_state() of
-        {ok, FullState} -> self() ! {send_full_state, FullState};
-        {error, Reason} -> io:format("WebSocket: Failed to get full state: ~p~n", [Reason])
+    ControlNode = get_control_center_node(),
+    case rpc:call(ControlNode, logistics_state_collector, get_full_state, [], 5000) of
+        {ok, FullState} -> 
+            self() ! {send_full_state, FullState};
+        {error, Reason} -> 
+            io:format("WebSocket: Failed to get full state from ~p: ~p~n", [ControlNode, Reason]);
+        {badrpc, Reason} ->
+            io:format("WebSocket: RPC failed to control center ~p: ~p~n", [ControlNode, Reason])
     end.
     
-%% הערה: פונקציה מרכזית לטיפול בפקודות מהלקוח. כל הפקודות שהיו חסרות הוחזרו.
+%% הערה: פונקציה מרכזית לטיפול בפקודות מהלקוח - גרסה מבוזרת
 handle_client_command(<<"start_simulation">>, Cmd) ->
     Config = extract_config_from_command(Cmd),
-    control_center:start_simulation(Config);
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, start_simulation, [Config], 10000);
 handle_client_command(<<"stop_simulation">>, _Cmd) ->
-    control_center:stop_simulation();
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, stop_simulation, [], 10000);
 handle_client_command(<<"pause_simulation">>, _Cmd) ->
-    control_center:pause_simulation();
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, pause_simulation, [], 5000);
 handle_client_command(<<"continue_simulation">>, _Cmd) ->
-    control_center:continue_simulation();
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, continue_simulation, [], 5000);
 handle_client_command(<<"pause_order_generator">>, _Cmd) ->
-    control_center:pause_order_generator();
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, pause_order_generator, [], 5000);
 handle_client_command(<<"continue_order_generator">>, _Cmd) ->
-    control_center:continue_order_generator();
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, continue_order_generator, [], 5000);
 handle_client_command(<<"update_order_interval">>, Cmd) ->
     Interval = maps:get(<<"interval">>, Cmd),
-    control_center:update_order_interval(Interval);
+    ControlNode = get_control_center_node(),
+    rpc:call(ControlNode, control_center, update_order_interval, [Interval], 5000);
 handle_client_command(Action, _Cmd) ->
     io:format("WS Handler: Unknown client action: ~p~n", [Action]).
 

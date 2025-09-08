@@ -14,9 +14,9 @@ start_link() ->
 
 %% אתחול הסופרווייזר והגדרת תהליכי התשתית
 init([]) ->
-    io:format("Main Supervisor starting with infrastructure processes...~n"),
+    io:format("Control Center Supervisor starting with infrastructure processes...~n"),
     
-    %% ChildSpecs – רשימת תהליכי התשתית כולל מודולי המפה
+    %% ChildSpecs – רשימת תהליכי התשתית למרכז הבקרה
     ChildSpecs = [
         %% Map Server - חייב להיות ראשון כי אחרים תלויים בו
         #{id => map_server,
@@ -25,14 +25,6 @@ init([]) ->
           shutdown => 5000,
           type => worker,
           modules => [map_server]},
-
-        %% Location Tracker - למעקב אחר תנועת שליחים
-        #{id => location_tracker,
-          start => {location_tracker, start_link, []},
-          restart => permanent,
-          shutdown => 5000,
-          type => worker,
-          modules => [location_tracker]},
 
         %% Control Center - המוח המרכזי שמנהל את כל הסימולציה
         #{id => control_center,
@@ -50,13 +42,13 @@ init([]) ->
           type => worker,
           modules => [logistics_state_collector]},
 
-        %% Web Server - שרת HTTP ו-WebSocket לממשק הגרפי
-        #{id => logistics_web_server,
-          start => {logistics_web_server, start_link, []},
+        %% Random Order Generator - גנרטור הזמנות אקראיות
+        #{id => random_order_generator,
+          start => {random_order_generator, start_link, []},
           restart => permanent,
           shutdown => 5000,
           type => worker,
-          modules => [logistics_web_server]}
+          modules => [random_order_generator]}
     ],
     
     %% אסטרטגיית הסופרווייזר
